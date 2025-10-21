@@ -16,16 +16,16 @@ except (ImportError, ModuleNotFoundError):
 def pct(n, d): 
     return round((n / d * 100.0), 2) if d else 0.0
 
-def validate_email_list(emails_field, syntax_only=True, dns_mx=False):
-    details = []
+def validate_email_list(emails_field: object, dns_mx: object = False) -> Tuple[int, int, List[str]]:
+    details: List[str] = []
     if not isinstance(emails_field, str) or not emails_field.strip(): return 0, 0, details
     parts = [p for p in emails_field.split("|") if p.strip()]
-    valid_count = 0
+    valid_count: int = 0
     for p in parts:
         email = p.split("::")[0].strip()
         label = p.split("::")[1].strip() if "::" in p else ""
 
-        normalized = validate_email_safe(email, check_deliverability=(dns_mx if not syntax_only else False))
+        normalized = validate_email_safe(email, check_deliverability=dns_mx)
         is_valid = bool(normalized)
         if is_valid:
             email = normalized
@@ -100,7 +100,7 @@ def main():
 
     records = []
     for _, row in df.iterrows():
-        e_valid, e_total, e_details = validate_email_list(row.get("emails",""), syntax_only=True, dns_mx=dns_mx)
+        e_valid, e_total, e_details = validate_email_list(row.get("emails",""), dns_mx=dns_mx)
         p_valid, p_total, p_details = validate_phone_list(row.get("phones",""))
         a_valid, a_total, a_details = parse_addresses_json(row.get("addresses_json",""))
         rec = {
