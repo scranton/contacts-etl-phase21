@@ -1,7 +1,32 @@
-
 import re
+import unicodedata
 import uuid
 from difflib import SequenceMatcher
+import os
+from io import StringIO
+from typing import List, Dict, Any, Optional
+
+import pandas as pd
+import logging
+
+# Optional external libs: import once and expose safe wrappers
+try:
+    from email_validator import validate_email, EmailNotValidError  # type: ignore
+    HAS_EMAIL_VALIDATOR = True
+except (ImportError, ModuleNotFoundError):
+    validate_email = None  # type: ignore
+    class _DummyEmailNotValidError(Exception): ...
+    EmailNotValidError = _DummyEmailNotValidError  # type: ignore
+    HAS_EMAIL_VALIDATOR = False
+
+try:
+    import phonenumbers  # type: ignore
+    NumberParseException = getattr(phonenumbers, "NumberParseException", Exception)
+    HAS_PHONENUMBERS = True
+except (ImportError, ModuleNotFoundError):
+    phonenumbers = None  # type: ignore
+    NumberParseException = Exception
+    HAS_PHONENUMBERS = False
 
 # Country/state mappings (subset, extend as needed)
 ISO2 = {
@@ -28,6 +53,126 @@ STATE_ABBR = {
     "west virginia":"WV","wisconsin":"WI","wyoming":"WY","district of columbia":"DC","dc":"DC"
 }
 PARTICLES = {"da","de","del","della","der","di","la","le","van","von","den","ten","ter","du","st","st.","san","mac","mc","o","d","l"}
+
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-']+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+def validate_email_safe(raw: str, check_deliverability: bool = False) -> Optional[str]:
+    """
+    Return normalized email on success, or empty string on invalid.
+    Uses email_validator when available, otherwise falls back to regex.
+    """
+    e = (raw or "").strip()
+    if not e:
+        return ""
+    if HAS_EMAIL_VALIDATOR:
+        try:
+            return validate_email(e, check_deliverability=check_deliverability).normalized
+        except EmailNotValidError:
+            return ""
+    e = e.replace(" ", "").lower()
+    return e if EMAIL_RE.match(e) else ""
+
+def is_valid_phone_safe(e164_or_raw: str) -> bool:
+    """
+    Quick validity check: prefer phonenumbers if available, otherwise simple heuristic.
+    Accepts either already-formatted E164 or raw input.
+    """
+    s = (e164_or_raw or "").strip()
+    if not s:
+        return False
+    if HAS_PHONENUMBERS:
+        try:
+            pn = phonenumbers.parse(s, None if s.startswith("+") else "US")
+            return phonenumbers.is_possible_number(pn) and phonenumbers.is_valid_number(pn)
+        except NumberParseException:
+            return False
+    # fallback: must start with '+' and contain at least 11 digits total
+    digits = re.sub(r"\D", "", s)
+    return s.startswith("+") and len(digits) >= 11
+
+def format_phone_e164_safe(raw: str, default_country: str = "US") -> str:
+    """
+    Return an E.164-like formatted phone or empty string.
+    Uses `phonenumbers` when available, otherwise falls back to simple digit heuristics.
+    Does *not* assert validity — caller can use `is_valid_phone_safe`.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    formatted = ""
+    if HAS_PHONENUMBERS:
+        try:
+            pn = phonenumbers.parse(s, None if s.startswith("+") else default_country)
+            formatted = phonenumbers.format_number(pn, phonenumbers.PhoneNumberFormat.E164)
+        except NumberParseException:
+            logging.getLogger(__name__).debug("phonenumbers.parse failed for %s", s)
+            formatted = ""
+    if not formatted:
+        digits = re.sub(r"\D", "", s)
+        if len(digits) == 10:
+            formatted = f"+1{digits}"
+        elif len(digits) == 11 and digits.startswith("1"):
+            formatted = f"+{digits}"
+        elif s.startswith("+"):
+            formatted = re.sub(r"[^\d+]", "", s)
+        else:
+            formatted = f"+1{digits}" if digits else ""
+    return formatted
+
+def _sget(row: Any, key: str) -> str:
+    """Safe string retrieval from a mapping/row and strip whitespace."""
+    try:
+        return str(row.get(key, "") or "").strip()
+    except (AttributeError, KeyError, TypeError):
+        try:
+            return str(row[key] if key in row else "").strip()
+        except (KeyError, TypeError, AttributeError):
+            return ""
+
+def _warn_missing(path: Optional[str], label: str) -> bool:
+    """Log a warning if path is missing; returns True if missing."""
+    if not path or not os.path.exists(path):
+        logging.getLogger(__name__).warning("%s path missing: %s", label, path)
+        return True
+    return False
+
+def read_csv_with_optional_header(path: Optional[str], header_starts_with: Optional[str] = None) -> pd.DataFrame:
+    """Read CSV but allow noisy prefix by scanning for a header line that starts with header_starts_with."""
+    if not path:
+        return pd.DataFrame()
+    if not header_starts_with:
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
+    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+        txt = fh.read().splitlines()
+    header_idx = None
+    for i, line in enumerate(txt[:100]):
+        if line.strip().startswith(header_starts_with):
+            header_idx = i
+            break
+    if header_idx is None:
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
+    return pd.read_csv(StringIO("\n".join(txt[header_idx:])), dtype=str, keep_default_na=False)
+
+def uniq_list_of_dicts(lst: List[Dict[str, Any]], key: str = "value") -> List[Dict[str, Any]]:
+    """Deduplicate list-of-dicts preserving order by `key`."""
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for d in lst:
+        v = d.get(key, "")
+        if v and v not in seen:
+            seen.add(v)
+            out.append(d)
+    return out
+
+def _norm(s: Optional[str]) -> str:
+    """Normalize text: strip, unicode-normalize, collapse whitespace and lowercase."""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", s).lower()
+
 
 def normalize_state(s:str)->str:
     s = (s or "").strip()

@@ -5,39 +5,26 @@ import logging
 import os
 import re
 import uuid
-import unicodedata
 from argparse import Namespace
-from typing import Any, Dict, List, Tuple, Optional
-
-import yaml
-
 from collections import Counter, defaultdict
 from pathlib import Path
-from io import StringIO
+from typing import Any, Dict, List, Tuple, Optional
 
 import pandas as pd
+import yaml
 from pandas import DataFrame
 
 from .common import (
-    normalize_state, normalize_country_iso2, strip_suffixes_and_parse_name, deterministic_uuid, seq_ratio
+    normalize_state,
+    normalize_country_iso2,
+    strip_suffixes_and_parse_name,
+    deterministic_uuid,
+    seq_ratio,
+    _sget,
+    _warn_missing,
+    read_csv_with_optional_header,
+    _norm, validate_email_safe, is_valid_phone_safe, format_phone_e164_safe
 )
-
-# Optional libs: import specific symbols when available to simplify call sites
-try:
-    from email_validator import validate_email, EmailNotValidError  # type: ignore
-    HAS_EMAIL_VALIDATOR = True
-except ImportError:
-    # provide fallbacks so static analysis doesn't complain about undefined names
-    validate_email = None  # type: ignore
-    EmailNotValidError = Exception  # type: ignore
-    HAS_EMAIL_VALIDATOR = False
-
-try:
-    import phonenumbers
-    HAS_PHONENUMBERS = True
-except ImportError:
-    phonenumbers = None  # type: ignore
-    HAS_PHONENUMBERS = False
 
 # use module logger instead of configuring logging at import time
 logger = logging.getLogger(__name__)
@@ -46,75 +33,6 @@ DEFAULT_GEN = {"jr","sr","ii","iii","iv","v","vi"}
 DEFAULT_PROF = {"phd","pmp","csm","spc6","mba","cissp","crisc","cscp","cams","cpa","cfa","pe","cisa","cism","cfe","cma","ceh","itil","sixsigma","leansixsigma","esq","jd"}
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-']+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
-
-# --- small reusable helpers to reduce repetition ---
-
-def _sget(row: Any, key: str) -> str:
-    """Safe string retrieval from a mapping/row and strip whitespace.
-
-    Accepts dict-like objects and pandas Series.
-    """
-    try:
-        return str(row.get(key, "") or "").strip()
-    except Exception:
-        # pandas.Series doesn't always implement dict.get with same signature
-        try:
-            return str(row[key] if key in row else "").strip()
-        except Exception:
-            return ""
-
-
-def _warn_missing(path: Optional[str], label: str) -> bool:
-    """Log a warning if path is missing; returns True if missing."""
-    if not path or not os.path.exists(path):
-        logger.warning("%s path missing: %s", label, path)
-        return True
-    return False
-
-
-def read_csv_with_optional_header(path: Optional[str], header_starts_with: Optional[str] = None) -> pd.DataFrame:
-    """Read a CSV, but allow for a noisy prefix by scanning for a header line that starts with header_starts_with.
-
-    If header_starts_with is None the file is read directly with pandas.
-    If path is None, return an empty DataFrame.
-    """
-    if not path:
-        return pd.DataFrame()
-    if not header_starts_with:
-        return pd.read_csv(path, dtype=str, keep_default_na=False)
-    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-        txt = fh.read().splitlines()
-    header_idx = None
-    for i, line in enumerate(txt[:100]):
-        if line.strip().startswith(header_starts_with):
-            header_idx = i
-            break
-    if header_idx is None:
-        return pd.read_csv(path, dtype=str, keep_default_na=False)
-    return pd.read_csv(StringIO("\n".join(txt[header_idx:])), dtype=str, keep_default_na=False)
-
-
-def uniq_list_of_dicts(lst: List[Dict[str, Any]], key: str = "value") -> List[Dict[str, Any]]:
-    seen = set()
-    out: List[Dict[str, Any]] = []
-    for d in lst:
-        v1 = d.get(key, "")
-        if v1 and v1 not in seen:
-            seen.add(v1)
-            out.append(d)
-    return out
-
-
-# --- Nickname equivalence helpers (unchanged behavior) ---
-
-def _norm(s: Optional[str]) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    return re.sub(r"\s+", " ", s).lower()
-
 
 _NICKMAP = {
     "william": {"william","will","bill","billy","liam"},
@@ -211,40 +129,13 @@ def reconcile_name_from_email_and_last(local: str, last: str) -> str:
             return prefix[0].upper()
     return ""
 
-
-def clean_email_val(e: Optional[str]) -> str:
-    e = (e or "").strip()
-    if not e:
-        return ""
-    if HAS_EMAIL_VALIDATOR:
-        try:
-            return validate_email(e, check_deliverability=False).normalized
-        except EmailNotValidError:
-            return ""
-    e = e.replace(" ", "").lower()
-    return e if re.match(r"^[A-Za-z0-9._%+\-']+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", e) else ""
-
-
 def normalize_phone(num: Any, default_country: str = "US") -> str:
-    if not num or str(num).strip() == "":
+    """Normalize phone to E.164 when possible; return '' if invalid per is_valid_phone_safe."""
+    raw = (num or "").strip()
+    if not raw:
         return ""
-    raw = str(num).strip()
-    if HAS_PHONENUMBERS:
-        try:
-            pn = phonenumbers.parse(raw, None if raw.startswith("+") else default_country)
-            return phonenumbers.format_number(pn, phonenumbers.PhoneNumberFormat.E164)
-        except phonenumbers.NumberParseException:
-            # parsing failed for this number; fall back to heuristic
-            pass
-    digits = re.sub(r"\D", "", raw)
-    if len(digits) == 10:
-        return f"+1{digits}"
-    if len(digits) == 11 and digits.startswith("1"):
-        return f"+{digits}"
-    if raw.startswith("+"):
-        return re.sub(r"[^\d+]", "", raw)
-    return f"+1{digits}" if digits else ""
-
+    formatted = format_phone_e164_safe(raw, default_country)
+    return formatted if is_valid_phone_safe(formatted) else ""
 
 def aggregate_unique(list_of_dicts: List[Dict[str, Any]], key: str = "value") -> List[Dict[str, Any]]:
     seen = set(); out = []
@@ -551,7 +442,7 @@ def build(args: Namespace) -> Tuple[DataFrame, DataFrame]:
         r["full_name"] = clean_full
 
         # Emails
-        emails = [{"value": clean_email_val(e.get("value","")), "label": e.get("label","")} for e in r.get("emails",[])]
+        emails = [{"value": validate_email_safe(e.get("value","")), "label": e.get("label","")} for e in r.get("emails",[])]
         r["emails"] = aggregate_unique([e for e in emails if e["value"]])
 
         # --- NEW: sanitize first/middle/last if they contain emails ---

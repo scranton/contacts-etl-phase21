@@ -3,12 +3,20 @@ import csv
 import json
 import os
 import re
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, Set
+from .common import (
+    _norm,
+    read_csv_with_optional_header,
+    _sget,
+    _warn_missing,
+)
 
 import pandas as pd
+import logging
 
 MARTIAL_KWS = [r"tai\s*chi", r"wu\s*an", r"wu\s*dao", r"kung\s*fu", r"shaolin", r"martial\s*arts"]
 NUTCRACKER_KWS = [r"nutcracker", r"\bcherub(s)?\b", r"jose\s*mateo", r"ballet"]
+
 # Default local cities; override in config
 DEFAULT_LOCAL_CITIES = ["braintree","quincy","weymouth","dedham","milton","hingham","needham","brookline","cambridge","somerville","boston"]
 
@@ -33,12 +41,12 @@ def extract_domain_set(emails_field):
 def tag_row(row, cfg):
     tags=set()
     text_blob = " ".join([
-        str(row.get("company","")), str(row.get("title","")), str(row.get("linkedin_url",""))
+        _sget(row, "company"), _sget(row, "title"), _sget(row, "linkedin_url")
     ]).lower()
 
     # from lineage_notes added by optional enrichment (if present)
     if "notes_blob" in row and row["notes_blob"]:
-        text_blob += " " + str(row["notes_blob"]).lower()
+        text_blob += " " + _norm(row["notes_blob"])
 
     # martial arts
     if any_kw(text_blob, MARTIAL_KWS):
@@ -49,31 +57,31 @@ def tag_row(row, cfg):
         tags.add("nutcracker_performance")
 
     # work colleague: via prior companies or email domains
-    prior_companies = [c.lower() for c in cfg.get("prior_companies", [])]
-    prior_domains = [d.lower() for d in cfg.get("prior_domains", [])]
-    company = str(row.get("company","")).lower()
+    prior_companies = [_norm(c) for c in cfg.get("prior_companies", [])]
+    prior_domains = [_norm(d) for d in cfg.get("prior_domains", [])]
+    company = _norm(row["company"])
     if company and any(pc in company for pc in prior_companies):
         tags.add("work_colleague")
-    domains = extract_domain_set(row.get("emails",""))
+    domains = extract_domain_set(_sget(row, "emails"))
     if any(any(pd1 in dom for pd1 in prior_domains) for dom in domains):
         tags.add("work_colleague")
 
     # local cities from addresses_json
     try:
-        addrs = json.loads(row.get("addresses_json","") or "[]")
+        addrs = json.loads(row.get("addresses_json", "") or "[]")
     except Exception:
         addrs = []
-    local_cities = [c.lower() for c in cfg.get("local_cities", DEFAULT_LOCAL_CITIES)]
+    local_cities = [_norm(c) for c in cfg.get("local_cities", DEFAULT_LOCAL_CITIES)]
     for a in addrs:
-        city = str(a.get("city","")).lower()
-        if city and any(city == lc or lc in city for lc in local_cities):
+        city = _norm(a["city"])
+        state = _norm(a["state"])
+        if state and state == "ma" and city and any(city == lc or lc in city for lc in local_cities):
             tags.add("local_south_shore"); break
 
     # primary relationship category: personal > professional > local_referral
-    primary = ""
     if "martial_arts" in tags or "nutcracker_performance" in tags:
         primary = "personal"
-    elif "work_colleague" in tags or str(row.get("linkedin_url","")).strip():
+    elif "work_colleague" in tags or str(row.get("linkedin_url", "")).strip():
         primary = "professional"
     elif "local_south_shore" in tags:
         primary = "local_referral"
@@ -90,13 +98,12 @@ def referral_priority(row, confidence_weight=0.6, tag_weights=None):
     """
     if tag_weights is None:
         tag_weights = {"martial_arts":30, "nutcracker_performance":25, "work_colleague":20, "local_south_shore":10}
-    conf: float = 0.0
     try:
         conf = float(row.get("confidence_score", 0) or 0)
     except Exception:
         conf = 0.0
     score: float = conf * confidence_weight
-    tags = set(str(row.get("tags","")).split("|")) if row.get("tags") else set()
+    tags = set(_sget(row, "tags").split("|")) if row.get("tags") else set()
     score += sum(tag_weights.get(t, 0) for t in tags)
     # cap at 100
     return int(min(100, round(score, 0)))
@@ -104,11 +111,11 @@ def referral_priority(row, confidence_weight=0.6, tag_weights=None):
 def load_gmail_notes(path):
     """Return dict (source_row_id -> notes text) for gmail CSV."""
     notes: Dict[str, str] = {}
-    if not path or not os.path.exists(path): return notes
-    df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if _warn_missing(path, "GMail"): return notes
+    df = read_csv_with_optional_header(path)
     if "Notes" not in df.columns: return notes
     for i, row in df.iterrows():
-        n = str(row.get("Notes","")).strip()
+        n = _norm(row["Notes"])
         if n:
             notes[str(i)] = n
     return notes
@@ -117,7 +124,7 @@ def load_gmail_notes(path):
 def load_vcf_notes(path):
     """Basic NOTE extraction from VCF, returns dict of (index -> note)."""
     results: Dict[str, str] = {}
-    if not path or not os.path.exists(path): return results
+    if _warn_missing(path, "Mac VCF"): return results
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
     blocks = re.split(r"END:VCARD", content)
@@ -172,8 +179,8 @@ def build(args):
                     texts.append(vcf_notes[rid])
             if texts:
                 notes_map[cid] = " | ".join(texts)
-    except Exception:
-        pass
+    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as e:
+        logging.getLogger(__name__).warning("Unable to build notes_map from lineage: %s", e)
 
     # Apply tagging
     tag_list=[]; primary_list=[]; notes_blob_list=[]
@@ -197,7 +204,11 @@ def build(args):
     df["notes_blob"] = notes_blob_list
 
     # referral priority
-    df["referral_priority_score"] = [referral_priority(r) for r in df.to_dict(orient="records")]
+    try:
+        df["referral_priority_score"] = [referral_priority(r) for r in df.to_dict(orient="records")]
+    except Exception as e:
+        logging.getLogger(__name__).warning("Unable to calculate referral_priority_score: %s", e)
+        df["referral_priority_score"] = None
 
     # Save outputs
     out_contacts = os.path.join(out_dir, "tagged_contacts.csv")

@@ -2,6 +2,8 @@ import os, csv, argparse
 import pandas as pd
 from typing import Dict, Any
 
+from contacts_etl.common import _warn_missing
+
 
 def pct(n, d):
     return round((n / d * 100.0), 2) if d else 0.0
@@ -10,8 +12,7 @@ def pct(n, d):
 def load_validation_map(validation_csv) -> Dict[str, Dict[str, int]]:
     """Returns mapping contact_id -> metrics dict with int values."""
     v: Dict[str, Dict[str, int]] = {}
-    if not validation_csv or not os.path.exists(validation_csv):
-        return v
+    if _warn_missing(validation_csv, "validation CSV"): return v
     df = pd.read_csv(validation_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
     # Cast numeric fields safely
     for col in ["email_valid_count","email_total","phone_valid_count","phone_total","addr_valid_count","addr_total","quality_score"]:

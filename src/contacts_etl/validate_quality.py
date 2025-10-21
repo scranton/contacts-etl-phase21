@@ -1,24 +1,16 @@
-
-import os, re, csv, json, argparse
+import os, csv, json, argparse
 import pandas as pd
+from .common import (
+    validate_email_safe,
+    is_valid_phone_safe
+)
+from typing import Tuple, List
 
 # Optional libs
 try:
-    from email_validator import validate_email, EmailNotValidError
-    HAS_EMAIL_VALIDATOR=True
-except Exception:
-    HAS_EMAIL_VALIDATOR=False
-
-try:
-    import phonenumbers
-    HAS_PHONENUMBERS=True
-except Exception:
-    HAS_PHONENUMBERS=False
-
-try:
     import usaddress
     HAS_USADDRESS=True
-except Exception:
+except (ImportError, ModuleNotFoundError):
     HAS_USADDRESS=False
 
 def pct(n, d): 
@@ -32,50 +24,42 @@ def validate_email_list(emails_field, syntax_only=True, dns_mx=False):
     for p in parts:
         email = p.split("::")[0].strip()
         label = p.split("::")[1].strip() if "::" in p else ""
-        is_valid = False
-        if HAS_EMAIL_VALIDATOR:
-            try:
-                normalized = validate_email(
-                    email,
-                    check_deliverability = True if dns_mx else False
-                ).normalized if not syntax_only or dns_mx else validate_email(email, check_deliverability=False).normalized
-                email = normalized
-                is_valid = True
-            except EmailNotValidError:
-                is_valid = False
-        else:
-            is_valid = bool(re.match(r"^[A-Za-z0-9._%+\-']+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", email))
+
+        normalized = validate_email_safe(email, check_deliverability=(dns_mx if not syntax_only else False))
+        is_valid = bool(normalized)
+        if is_valid:
+            email = normalized
+
         valid_count += 1 if is_valid else 0
         details.append({"email": email, "label": label, "valid": is_valid})
     return valid_count, len(parts), details
 
-def validate_phone_list(phones_field):
-    details = []
-    if not isinstance(phones_field, str) or not phones_field.strip(): return 0, 0, details
-    parts = [p for p in phones_field.split("|") if p.strip()]
-    valid_count = 0
+def validate_phone_list(phones_field: str) -> Tuple[int, int, List[str]]:
+    """
+    Validate a pipe-delimited phones field like "value::label|value2::label2".
+    Returns (valid_count, total_count, valid_values_list).
+    Uses is_valid_phone_safe for validation.
+    """
+    if not phones_field:
+        return 0, 0, []
+
+    parts = [p for p in str(phones_field).split("|") if p and p.strip()]
+    total = len(parts)
+    valid_values: List[str] = []
+
     for p in parts:
-        phone = p.split("::")[0].strip()
-        label = p.split("::")[1].strip() if "::" in p else ""
-        is_valid = False
-        if HAS_PHONENUMBERS:
-            try:
-                pn = phonenumbers.parse(phone, None if phone.startswith("+") else "US")
-                is_valid = phonenumbers.is_possible_number(pn) and phonenumbers.is_valid_number(pn)
-            except Exception:
-                is_valid = False
-        else:
-            is_valid = phone.startswith("+") and len(re.sub(r"\D", "", phone)) >= 11
-        valid_count += 1 if is_valid else 0
-        details.append({"phone": phone, "label": label, "valid": is_valid})
-    return valid_count, len(parts), details
+        val = p.split("::", 1)[0].strip()
+        if val and is_valid_phone_safe(val):
+            valid_values.append(val)
+
+    return len(valid_values), total, valid_values
 
 def parse_addresses_json(addresses_json):
     details = []
     if not isinstance(addresses_json, str) or not addresses_json.strip(): return 0, 0, details
     try:
         addrs = json.loads(addresses_json)
-    except Exception:
+    except (ValueError, json.JSONDecodeError, TypeError):
         return 0, 0, details
     valid_count = 0
     for a in addrs:
