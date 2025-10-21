@@ -1,12 +1,15 @@
 import os, csv, argparse
 import pandas as pd
+from typing import Dict, Any
+
 
 def pct(n, d):
     return round((n / d * 100.0), 2) if d else 0.0
 
-def load_validation_map(validation_csv):
-    """Returns dict contact_id -> {email_valid_count, email_total, phone_valid_count, phone_total, addr_valid_count, addr_total, quality_score}"""
-    v = {}
+
+def load_validation_map(validation_csv) -> Dict[str, Dict[str, int]]:
+    """Returns mapping contact_id -> metrics dict with int values."""
+    v: Dict[str, Dict[str, int]] = {}
     if not validation_csv or not os.path.exists(validation_csv):
         return v
     df = pd.read_csv(validation_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
@@ -26,32 +29,35 @@ def load_validation_map(validation_csv):
         }
     return v
 
+
 def compute_corroborators(row):
     """Count distinct corroborators present: email, phone, address, linkedin"""
     corr = 0
-    if str(row.get("emails","")).strip():
+    if str(row.get("emails", "")).strip():
         corr += 1
-    if str(row.get("phones","")).strip():
+    if str(row.get("phones", "")).strip():
         corr += 1
-    if str(row.get("addresses_json","")).strip() and str(row.get("addresses_json","")).strip() != "[]":
+    if str(row.get("addresses_json", "")).strip() and str(row.get("addresses_json", "")).strip() != "[]":
         corr += 1
-    if str(row.get("linkedin_url","")).strip():
+    if str(row.get("linkedin_url", "")).strip():
         corr += 1
     return corr
 
-def has_company_title(row):
-    return 1 if (str(row.get("company","")).strip() or str(row.get("title","")).strip()) else 0
 
-def confidence_score(row, vmap):
+def has_company_title(row):
+    return 1 if (str(row.get("company", "")).strip() or str(row.get("title", "")).strip()) else 0
+
+
+def confidence_score(row, vmap: Dict[str, Dict[str, int]]) -> int:
     """0-100, additive with caps. Weighted for practicality."""
-    cid = str(row.get("contact_id",""))
-    vm = vmap.get(cid, {})
+    cid = str(row.get("contact_id", ""))
+    vm: Dict[str, int] = vmap.get(cid, {})
     email_valid = 0 < vm.get("email_total", 0) == vm.get("email_valid_count", 0)
     phone_valid = 0 < vm.get("phone_total", 0) == vm.get("phone_valid_count", 0)
-    addr_any_valid = vm.get("addr_valid_count",0) > 0
+    addr_any_valid = vm.get("addr_valid_count", 0) > 0
     lineage_depth = int(row.get("source_count", 1))
 
-    score = 0
+    score: float = 0.0
 
     # Base: previous quality score (scaled to 0-40)
     base_quality = min(int(vm.get("quality_score", 0)), 100)
@@ -69,7 +75,7 @@ def confidence_score(row, vmap):
         score += 2
 
     # LinkedIn + company/title (up to +15)
-    if str(row.get("linkedin_url","")).strip():
+    if str(row.get("linkedin_url", "")).strip():
         score += 8
     if has_company_title(row):
         score += 7
@@ -80,15 +86,16 @@ def confidence_score(row, vmap):
     if addr_any_valid: score += 2
 
     # Consistency heuristics (up to +5): name + last name present, non-empty full_name
-    if str(row.get("first_name","")).strip() and str(row.get("last_name","")).strip():
+    if str(row.get("first_name", "")).strip() and str(row.get("last_name", "")).strip():
         score += 3
-    if str(row.get("full_name","")).strip():
+    if str(row.get("full_name", "")).strip():
         score += 2
 
     return int(max(0, min(100, score)))
 
+
 def main():
-    import yaml
+    import yaml  # type: ignore
     parser = argparse.ArgumentParser(description="Compute confidence scores and summary for consolidated contacts.")
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--contacts-csv", type=str, default=None)
@@ -96,7 +103,7 @@ def main():
     parser.add_argument("--out-dir", type=str, default=None)
 
     args = parser.parse_args()
-    cfg = {}
+    cfg: Dict[str, Any] = {}
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}

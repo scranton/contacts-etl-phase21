@@ -1,9 +1,9 @@
-
 import argparse
 import csv
 import json
 import os
 import re
+from typing import Any, Dict, List, Set
 
 import pandas as pd
 
@@ -20,7 +20,7 @@ def any_kw(text, patterns):
     return False
 
 def extract_domain_set(emails_field):
-    domains=set()
+    domains: Set[str] = set()
     if not isinstance(emails_field, str) or not emails_field.strip():
         return domains
     parts = [p for p in emails_field.split("|") if p.strip()]
@@ -90,12 +90,12 @@ def referral_priority(row, confidence_weight=0.6, tag_weights=None):
     """
     if tag_weights is None:
         tag_weights = {"martial_arts":30, "nutcracker_performance":25, "work_colleague":20, "local_south_shore":10}
-    conf = 0
+    conf: float = 0.0
     try:
         conf = float(row.get("confidence_score", 0) or 0)
     except Exception:
         conf = 0.0
-    score = conf * confidence_weight
+    score: float = conf * confidence_weight
     tags = set(str(row.get("tags","")).split("|")) if row.get("tags") else set()
     score += sum(tag_weights.get(t, 0) for t in tags)
     # cap at 100
@@ -103,7 +103,7 @@ def referral_priority(row, confidence_weight=0.6, tag_weights=None):
 
 def load_gmail_notes(path):
     """Return dict (source_row_id -> notes text) for gmail CSV."""
-    notes = {}
+    notes: Dict[str, str] = {}
     if not path or not os.path.exists(path): return notes
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
     if "Notes" not in df.columns: return notes
@@ -113,9 +113,10 @@ def load_gmail_notes(path):
             notes[str(i)] = n
     return notes
 
+
 def load_vcf_notes(path):
-    """Basic NOTE extraction from VCF, returns list of (index, note)."""
-    results = {}
+    """Basic NOTE extraction from VCF, returns dict of (index -> note)."""
+    results: Dict[str, str] = {}
     if not path or not os.path.exists(path): return results
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
@@ -130,8 +131,8 @@ def load_vcf_notes(path):
     return results
 
 def build(args):
-    import yaml
-    cfg = {}
+    import yaml  # type: ignore
+    cfg: Dict[str, Any] = {}
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
