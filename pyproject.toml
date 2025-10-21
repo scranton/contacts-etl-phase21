@@ -1,0 +1,43 @@
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contacts-etl"
+version = "0.1.0"
+description = "Contact list consolidation, normalization, and validation pipeline."
+authors = [{name = "You"}]
+readme = "README.md"
+requires-python = ">=3.9"
+
+dependencies = [
+  "pandas>=2.2,<2.4",
+  "python-dateutil>=2.8.2",
+  "pyyaml>=6.0.1",
+]
+
+[project.optional-dependencies]
+validation = [
+  "email-validator>=2.1.0",
+  "phonenumberslite>=8.13.0",
+  "usaddress>=0.5.10",
+  "dnspython>=2.3.0"
+]
+dedupe = [
+  "recordlinkage>=0.16",
+  "numpy>=1.26"
+]
+dev = [
+  "pandas-stubs>=2.2,<2.4"
+]
+
+[project.scripts]
+contacts-tag = "contacts_etl.tag_contacts:main"
+contacts-confidence = "contacts_etl.confidence_report:main"
+contacts-consolidate = "contacts_etl.combine_contacts:main"
+contacts-validate = "contacts_etl.validate_quality:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["contacts_etl"]

@@ -1,0 +1,16 @@
+pandas<2.4,>=2.2
+python-dateutil>=2.8.2
+pyyaml>=6.0.1
+
+[dedupe]
+recordlinkage>=0.16
+numpy>=1.26
+
+[dev]
+pandas-stubs<2.4,>=2.2
+
+[validation]
+email-validator>=2.1.0
+phonenumberslite>=8.13.0
+usaddress>=0.5.10
+dnspython>=2.3.0

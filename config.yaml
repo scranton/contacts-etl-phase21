@@ -1,0 +1,53 @@
+# Copy to config.yaml and customize paths and flags
+
+# Input sources (any can be omitted if not available)
+inputs:
+  linkedin_csv: "/Users/scranton/DataspellProjects/contacts-etl-phase21/data/linkedin.csv"
+  gmail_csv: "/Users/scranton/DataspellProjects/contacts-etl-phase21/data/gmail.csv"
+  mac_vcf: "/Users/scranton/DataspellProjects/contacts-etl-phase21/data/mac.vcf"
+
+# Output folder
+outputs:
+  dir: "/Users/scranton/DataspellProjects/contacts-etl-phase21/output"
+
+# Normalization options
+normalization:
+  default_phone_country: "US"   # used if numbers lack country code
+  keep_generational_suffixes: [ "jr", "sr", "ii", "iii", "iv", "v", "vi" ]
+  strip_professional_suffixes: true
+  # fuzzy prof suffix tokens (normalized)
+  professional_suffixes: [ "phd", "pmp", "csm", "spc6", "mba", "cissp", "crisc", "cscp", "cams", "cpa", "cfa", "pe", "cisa", "cism", "cfe", "cma", "ceh", "itil", "sixsigma", "leansixsigma", "esq", "jd" ]
+
+# Duplicate detection
+dedupe:
+  enable_nickname_equivalence: true
+  bucket_by_last_name: true
+  first_name_similarity_threshold: 0.88
+  merge_score_threshold: 1.2
+  relaxed_merge_threshold: 0.6  # applies when first name similarity >= threshold
+  require_corroborator: false    # set true to block name-only merges; requires email/phone/address/linkedin overlap
+
+# Library-assisted validation (optional, requires installing extras)
+validation:
+  email_syntax_check: true
+  email_dns_mx_check: true       # requires internet and dnspython; off by default
+  phone_strict_validation: true   # requires phonenumberslite
+  address_us_parse: false         # requires usaddress
+
+# Quality scoring
+quality:
+  email_full_score: 40
+  email_partial_score: 20
+  phone_full_score: 30
+  phone_partial_score: 15
+  address_any_score: 30
+
+
+# Tagging & referral settings
+tagging:
+  # Companies you've worked with previously (partial matches ok, case-insensitive)
+  prior_companies: [ "gridgain", "red hat", "tetrate", "redhat", "oracle", "teamlogic", "teamlogic it" ]
+  # Domains that indicate colleagues
+  prior_domains: [ "gridgain.com", "redhat.com", "tetrate.io", "oracle.com", "teamlogicit.com" ]
+  # Cities considered "local" (helps prioritize local referrals)
+  local_cities: [ "braintree","quincy","weymouth","dedham","milton","hingham" ]

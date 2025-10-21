@@ -1,0 +1,5 @@
+[console_scripts]
+contacts-confidence = contacts_etl.confidence_report:main
+contacts-consolidate = contacts_etl.combine_contacts:main
+contacts-tag = contacts_etl.tag_contacts:main
+contacts-validate = contacts_etl.validate_quality:main
