@@ -821,6 +821,9 @@ def build(args: Namespace) -> Tuple[DataFrame, DataFrame]:
     return contacts_df, lineage_df
 
 def main() -> int:
+    # Minimal: enable INFO for the whole process
+    logging.basicConfig(level=logging.INFO)
+
     parser = argparse.ArgumentParser(description="Consolidate contacts from multiple sources.")
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config.")
     parser.add_argument("--linkedin-csv", type=str, default=None)

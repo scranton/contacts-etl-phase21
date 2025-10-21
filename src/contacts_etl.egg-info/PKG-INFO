@@ -2,7 +2,22 @@ Metadata-Version: 2.4
 Name: contacts-etl
 Version: 0.1.0
 Summary: Contact list consolidation, normalization, and validation pipeline.
-Author: You
+Author-email: You <you@example.org>
+License: MIT
+Project-URL: Homepage, https://example.org/projects/contacts-etl
+Project-URL: Repository, https://github.com/yourorg/contacts-etl
+Project-URL: Bug Tracker, https://github.com/yourorg/contacts-etl/issues
+Project-URL: Documentation, https://yourorg.github.io/contacts-etl/
+Keywords: contacts,etl,normalization,dedupe,validation
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Libraries
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 Requires-Dist: pandas<2.4,>=2.2
@@ -22,6 +37,8 @@ Requires-Dist: pytest<9,>=7.0; extra == "dev"
 Requires-Dist: pytest-cov>=4.0; extra == "dev"
 Requires-Dist: mypy>=1.9; extra == "dev"
 Requires-Dist: flake8>=6.1; extra == "dev"
+Requires-Dist: black>=24.0; extra == "dev"
+Requires-Dist: isort>=5; extra == "dev"
 
 
 # contacts-etl

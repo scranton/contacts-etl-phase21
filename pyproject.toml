@@ -1,3 +1,4 @@
+# toml
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -6,15 +7,35 @@ build-backend = "setuptools.build_meta"
 name = "contacts-etl"
 version = "0.1.0"
 description = "Contact list consolidation, normalization, and validation pipeline."
-authors = [{ name = "You" }]
-readme = "README.md"
+readme = { file = "README.md", "content-type" = "text/markdown" }
 requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "You", email = "you@example.org" }]
+keywords = ["contacts", "etl", "normalization", "dedupe", "validation"]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
 
 dependencies = [
     "pandas>=2.2,<2.4",
     "python-dateutil>=2.8.2",
     "pyyaml>=6.0.1",
 ]
+
+[project.urls]
+"Homepage" = "https://example.org/projects/contacts-etl"
+"Repository" = "https://github.com/yourorg/contacts-etl"
+"Bug Tracker" = "https://github.com/yourorg/contacts-etl/issues"
+"Documentation" = "https://yourorg.github.io/contacts-etl/"
 
 [project.optional-dependencies]
 validation = [
@@ -32,7 +53,9 @@ dev = [
     "pytest>=7.0,<9",
     "pytest-cov>=4.0",
     "mypy>=1.9",
-    "flake8>=6.1"
+    "flake8>=6.1",
+    "black>=24.0", # optional formatting tool
+    "isort>=5"            # optional import sorter
 ]
 
 [project.scripts]
@@ -44,9 +67,22 @@ contacts-validate = "contacts_etl.validate_quality:main"
 # Pytest config for `pytest` when run in this project
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-q --color=yes"
+# include coverage by default for local runs; CI can override
+addopts = "-q --color=yes --cov=contacts_etl --cov-report=term-missing"
 testpaths = ["tests"]
 python_files = "test_*.py"
+
+# Coverage configuration (used by pytest-cov)
+[tool.coverage.run]
+branch = true
+source = ["contacts_etl"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
 
 # Mypy config (basic)
 [tool.mypy]
@@ -59,6 +95,14 @@ ignore_missing_imports = true
 [tool.flake8]
 max-line-length = 100
 extend-ignore = ["E203", "W503"]
+
+# Optional formatting / import sorting defaults
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.isort]
+profile = "black"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
