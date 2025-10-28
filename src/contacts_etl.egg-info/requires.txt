@@ -17,6 +17,8 @@ flake8<8,>=7.1.0
 flake8-pyproject>=1.2.3
 black>=24.0
 isort>=5
+ipykernel>=6.29
+nbformat>=5.10
 
 [tests]
 pytest<9,>=7.0

@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Tuple
 import pandas as pd
 import yaml  # type: ignore[import-untyped]
 
-from .common import is_valid_phone_safe, validate_email_safe
+from .common import load_config, is_valid_phone_safe, validate_email_safe
+from .logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +102,11 @@ def main():
         action="store_true",
         help="Enable DNS/MX deliverability check in email-validator (requires internet).",
     )
+    parser.add_argument("--log-level", type=str, default=None, help="Override logging level")
 
     args = parser.parse_args()
+    config = load_config(args)
+    configure_logging(config, level_override=args.log_level)
     cfg: Dict[str, Any] = {}
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:

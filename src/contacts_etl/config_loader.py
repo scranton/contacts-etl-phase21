@@ -43,6 +43,11 @@ class TaggingConfig:
 
 
 @dataclass
+class LoggingConfig:
+    level: str = "WARNING"
+
+
+@dataclass
 class PipelineConfig:
     inputs: Dict[str, Optional[str]]
     outputs: OutputsConfig
@@ -50,6 +55,7 @@ class PipelineConfig:
     dedupe: DedupeConfig
     validation: ValidationConfig
     tagging: TaggingConfig
+    logging: LoggingConfig
 
 
 def _load_yaml(path: Optional[str]) -> Dict[str, Any]:
@@ -67,6 +73,7 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
     dedupe_cfg = config_data.get("dedupe", {})
     validation_cfg = config_data.get("validation", {})
     tagging_cfg = config_data.get("tagging", {})
+    logging_cfg = config_data.get("logging", {})
 
     outputs_dir = Path(getattr(args, "out_dir", None) or outputs_cfg.get("dir") or os.getcwd())
     outputs = OutputsConfig(dir=outputs_dir)
@@ -107,6 +114,10 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         local_cities=tagging_cfg.get("local_cities", []),
     )
 
+    arg_level = getattr(args, "log_level", None)
+    effective_level = (arg_level or logging_cfg.get("level") or "WARNING").upper()
+    logging_config = LoggingConfig(level=effective_level)
+
     resolved_inputs = {
         "linkedin_csv": getattr(args, "linkedin_csv", None) or inputs.get("linkedin_csv"),
         "gmail_csv": getattr(args, "gmail_csv", None) or inputs.get("gmail_csv"),
@@ -122,4 +133,5 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         dedupe=dedupe,
         validation=validation,
         tagging=tagging,
+        logging=logging_config,
     )

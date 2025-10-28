@@ -38,6 +38,8 @@ Requires-Dist: flake8<8,>=7.1.0; extra == "dev"
 Requires-Dist: flake8-pyproject>=1.2.3; extra == "dev"
 Requires-Dist: black>=24.0; extra == "dev"
 Requires-Dist: isort>=5; extra == "dev"
+Requires-Dist: ipykernel>=6.29; extra == "dev"
+Requires-Dist: nbformat>=5.10; extra == "dev"
 
 
 # Contact Cleansing Pipeline
@@ -96,10 +98,10 @@ contacts-etl-phase21/
 
 1. Copy the sample configuration and adjust paths/weights:
 
-   ```bash
-   cp config.example.yaml config.yaml
-   # edit config.yaml to point at your data and tweak tagging settings
-   ```
+  ```bash
+  cp config.example.yaml config.yaml
+  # edit config.yaml to point at your data, tweak tagging settings, and set defaults
+  ```
 
 2. Create a virtual environment and install the package in editable mode:
 
@@ -143,8 +145,10 @@ contacts-etl-phase21/
 
 ## Analysis Notebooks
 
-- `scripts/confidence_insights.ipynb` — highlights the top 25 contacts from `confidence_report.csv` in the `very_high` and `high` buckets, including source counts and available contact channels.
+- `scripts/confidence_insights.ipynb` — highlights the top 25 contacts from `confidence_report.csv` in the `very_high` and `high` buckets, including source counts and available contact channels (with invalid/non-standard details surfaced).
 - `scripts/referral_insights.ipynb` — surfaces the highest `referral_priority_score` entries from `referral_targets.csv` (or `tagged_contacts.csv` as a fallback) so you can line up warm introductions quickly.
+- `scripts/invalid_email_insights.ipynb` — lists every consolidated contact with an invalid email that was dropped during normalization.
+- `scripts/non_standard_phone_insights.ipynb` — lists contacts holding phone numbers that failed strict normalization so they can be audited.
 
 Open either notebook in VS Code Jupyter (Python 3.12+ kernel) after regenerating the pipeline outputs to explore the latest results.
 
@@ -244,12 +248,14 @@ This yields `output/referral_targets.csv` sorted by referral priority.
 
 ## Additional Notes
 
-- The consolidation stage now raises an error if duplicate `contact_id` values are produced; this catches determinism or merge regressions early.
+- Consolidated outputs include `invalid_emails` and `non_standard_phones` columns so you can trace discarded channel data; the insight notebooks provide ready-made views of those issues.
+- The consolidation stage raises an error if duplicate `contact_id` values are produced; this catches determinism or merge regressions early.
 - `source_count` reflects the number of distinct source systems contributing to a contact, while `source_row_count` captures the total number of source rows merged.
 - All CSV outputs are fully quoted for compatibility with Excel and Pandas.
 - Phone normalization defaults to the United States (`normalization.default_phone_country`).
 - Confidence and referral scores are capped at 100.
 - Each pipeline phase can be re-run independently; downstream stages read the latest CSVs from `outputs.dir`.
+- Logging defaults to `WARNING`. Override globally via `config.yaml` (`logging.level`), per-run via `--log-level`, or ad hoc with the `CONTACTS_ETL_LOG_LEVEL` environment variable.
 - Tests and documentation use synthetic names, emails, and phone numbers—never commit real PII.
 
 Happy consolidating!

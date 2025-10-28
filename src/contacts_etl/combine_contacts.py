@@ -30,6 +30,7 @@ from .common import (
     warn_missing,
 )
 from .config_loader import PipelineConfig
+from .logging_utils import configure_logging
 from .models import Address, Phone
 
 # use module logger instead of configuring logging at import time
@@ -605,7 +606,6 @@ def build(
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="Consolidate contacts from multiple sources.")
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config.")
@@ -627,9 +627,11 @@ def main() -> int:
     )
     parser.add_argument("--keep-generational-suffixes", nargs="*", default=None)
     parser.add_argument("--professional-suffixes", nargs="*", default=None)
+    parser.add_argument("--log-level", type=str, default=None, help="Override logging level")
     args = parser.parse_args()
 
     config = load_config(args)
+    configure_logging(config, level_override=args.log_level)
     contacts_df, lineage_df = build(args, config=config)
 
     out_dir = config.outputs.dir

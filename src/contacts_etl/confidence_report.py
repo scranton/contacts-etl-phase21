@@ -7,6 +7,7 @@ import pandas as pd
 
 from contacts_etl.common import load_config, warn_missing
 from contacts_etl.config_loader import PipelineConfig
+from contacts_etl.logging_utils import configure_logging
 
 
 def pct(n, d):
@@ -136,9 +137,11 @@ def main():
     parser.add_argument("--contacts-csv", type=str, default=None)
     parser.add_argument("--validation-csv", type=str, default=None)
     parser.add_argument("--out-dir", type=str, default=None)
+    parser.add_argument("--log-level", type=str, default=None, help="Override logging level")
 
     args = parser.parse_args()
     config = load_config(args)
+    configure_logging(config, level_override=args.log_level)
     contacts_csv, validation_csv, out_dir = _resolve_paths(args, config)
 
     # Load data

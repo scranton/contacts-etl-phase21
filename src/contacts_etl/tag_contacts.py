@@ -10,6 +10,7 @@ import pandas as pd
 
 from .common import load_config, read_csv_with_optional_header, safe_get, warn_missing
 from .config_loader import PipelineConfig
+from .logging_utils import configure_logging
 from .tagging import TagEngine, TaggingSettings
 
 logger = logging.getLogger(__name__)
@@ -187,8 +188,11 @@ def main():
     parser.add_argument("--gmail-csv", type=str, default=None)
     parser.add_argument("--mac-vcf", type=str, default=None)
     parser.add_argument("--out-dir", type=str, default=None)
+    parser.add_argument("--log-level", type=str, default=None, help="Override logging level")
     args = parser.parse_args()
-    return build(args)
+    config = load_config(args)
+    configure_logging(config, level_override=args.log_level)
+    return build(args, config=config)
 
 
 if __name__ == "__main__":

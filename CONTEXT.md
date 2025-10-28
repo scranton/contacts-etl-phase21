@@ -30,6 +30,7 @@ The `consolidated_lineage.csv` export always records which source rows contribut
 
 - `contact_id` generation now incorporates the contributing `(source, source_row_id)` pairs, and the consolidation step aborts if duplicates appear. Investigate any failure here before trusting downstream CSVs.
 - `source_count` captures the number of distinct systems (e.g., Gmail vs. LinkedIn) behind a contact, while `source_row_count` reports how many raw records were merged.
+- `invalid_emails` and `non_standard_phones` columns in `consolidated_contacts.csv` surface any channel data that normalization had to drop for follow-up remediation.
 
 ## Review Flow
 

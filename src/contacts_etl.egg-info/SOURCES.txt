@@ -5,6 +5,7 @@ src/contacts_etl/combine_contacts.py
 src/contacts_etl/common.py
 src/contacts_etl/confidence_report.py
 src/contacts_etl/config_loader.py
+src/contacts_etl/logging_utils.py
 src/contacts_etl/merge.py
 src/contacts_etl/models.py
 src/contacts_etl/normalization.py
