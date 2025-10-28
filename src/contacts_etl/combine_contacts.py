@@ -6,7 +6,8 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import replace
-from typing import Dict, List, Optional, Tuple
+import re
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -18,6 +19,8 @@ from .common import (
     NormalizationSettings,
     choose_best_first_name,
     deterministic_uuid,
+    format_phone_e164_safe,
+    is_valid_phone_safe,
     load_config,
     nickname_equivalent,
     normalize_contact_record,
@@ -59,6 +62,9 @@ DEFAULT_PROF = {
 }
 
 
+PHONE_VALUE_PATTERN = re.compile(r"\+?\d[\d\s()./-]{6,}\d")
+
+
 def _build_normalization_settings(config: PipelineConfig) -> NormalizationSettings:
     keep_suffixes = config.normalization.keep_generational_suffixes or list(DEFAULT_GEN)
     prof_suffixes = config.normalization.professional_suffixes or list(DEFAULT_PROF)
@@ -94,6 +100,22 @@ def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
     return records
 
 
+def _extract_phone_values(raw: str) -> List[str]:
+    if not raw:
+        return []
+    candidates: List[str] = []
+    for part in re.split(r"[\r\n|;]+", raw):
+        part = part.strip()
+        if not part:
+            continue
+        matches = PHONE_VALUE_PATTERN.findall(part)
+        if matches:
+            candidates.extend(match.strip() for match in matches)
+        else:
+            candidates.append(part)
+    return [candidate for candidate in candidates if candidate]
+
+
 def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
     if not path:
         return []
@@ -103,31 +125,45 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
     records: List[ContactRecord] = []
     for idx, row in df.iterrows():
         emails: List[Email] = []
-        for n in range(1, 5):
-            email_value = safe_get(row, f"E-mail {n} - Value")
+        for column in row.index:
+            if not str(column).startswith("E-mail ") or not str(column).endswith(" - Value"):
+                continue
+            email_value = safe_get(row, column)
             if not email_value:
                 continue
-            email_label = safe_get(row, f"E-mail {n} - Type").lower()
+            label_col = str(column).replace(" - Value", " - Type")
+            email_label = safe_get(row, label_col).lower()
             emails.append(Email(value=email_value, label=email_label))
+
         phones: List[Phone] = []
-        for n in range(1, 5):
-            phone_value = safe_get(row, f"Phone {n} - Value")
-            if not phone_value:
+        for column in row.index:
+            if not str(column).startswith("Phone ") or not str(column).endswith(" - Value"):
                 continue
-            phone_label = safe_get(row, f"Phone {n} - Label").lower()
-            phones.append(Phone(value=phone_value, label=phone_label))
+            phone_value_raw = safe_get(row, column)
+            if not phone_value_raw:
+                continue
+            label_col = str(column).replace(" - Value", " - Label")
+            phone_label = safe_get(row, label_col).lower()
+            for extracted in _extract_phone_values(phone_value_raw):
+                phones.append(Phone(value=extracted, label=phone_label))
+
         addresses: List[Address] = []
-        for n in range(1, 4):
+        address_ids: Set[str] = set()
+        for column in row.index:
+            match = re.match(r"Address (\d+) - ", str(column))
+            if match:
+                address_ids.add(match.group(1))
+        for addr_id in sorted(address_ids, key=lambda value: int(value)):
             address_entry = Address(
-                po_box=safe_get(row, f"Address {n} - PO Box"),
-                extended="",  # or pull a real field if one exists in the CSV
-                street=safe_get(row, f"Address {n} - Street")
-                or safe_get(row, f"Address {n} - Formatted"),
-                city=safe_get(row, f"Address {n} - City"),
-                state=safe_get(row, f"Address {n} - Region"),
-                postal_code=safe_get(row, f"Address {n} - Postal Code"),
-                country=safe_get(row, f"Address {n} - Country"),
-                label=safe_get(row, f"Address {n} - Label"),
+                po_box=safe_get(row, f"Address {addr_id} - PO Box"),
+                extended=safe_get(row, f"Address {addr_id} - Extended Address"),
+                street=safe_get(row, f"Address {addr_id} - Street")
+                or safe_get(row, f"Address {addr_id} - Formatted"),
+                city=safe_get(row, f"Address {addr_id} - City"),
+                state=safe_get(row, f"Address {addr_id} - Region"),
+                postal_code=safe_get(row, f"Address {addr_id} - Postal Code"),
+                country=safe_get(row, f"Address {addr_id} - Country"),
+                label=safe_get(row, f"Address {addr_id} - Label"),
             )
             if any(
                 getattr(address_entry, field)
@@ -236,7 +272,15 @@ def _normalize_records(
 def _bucket_records(records: List[ContactRecord]) -> Dict[str, List[int]]:
     buckets: Dict[str, List[int]] = defaultdict(list)
     for idx, record in enumerate(records):
-        key = normalize_text_key(record.last_name) or f"__blank_{idx}"
+        key = normalize_text_key(record.last_name)
+        if not key:
+            key = normalize_text_key(record.full_name)
+        if not key and record.emails:
+            key = normalize_text_key(record.emails[0].value)
+        if not key and record.phones:
+            key = normalize_text_key(record.phones[0].value)
+        if not key:
+            key = f"__blank_{idx}"
         buckets[key].append(idx)
     return buckets
 
@@ -320,8 +364,22 @@ def _cluster_indices(
     return clusters
 
 
+def _normalize_phone_value(value: str, default_country: str) -> Tuple[str, bool]:
+    raw_value = value or ""
+    cleaned_primary = format_phone_e164_safe(raw_value, default_country=default_country)
+    if cleaned_primary and is_valid_phone_safe(cleaned_primary):
+        return cleaned_primary, True
+    compact = re.sub(r"\s+", "", raw_value)
+    if compact and compact != raw_value:
+        cleaned_compact = format_phone_e164_safe(compact, default_country=default_country)
+        if cleaned_compact and is_valid_phone_safe(cleaned_compact):
+            return cleaned_compact, True
+    trimmed = raw_value.strip()
+    return trimmed, False
+
+
 def _merge_cluster(
-    indices: List[int], records: List[ContactRecord]
+    indices: List[int], records: List[ContactRecord], default_country: str
 ) -> Tuple[ContactRecord, List[LineageEntry]]:
     cluster_records = [records[idx] for idx in indices]
     best_first, _ = choose_best_first_name(cluster_records)
@@ -346,7 +404,20 @@ def _merge_cluster(
         for email in record.emails:
             all_emails[email.value] = email.label
         for phone in record.phones:
-            all_phones[phone.value] = phone.label
+            normalized_value, is_confident = _normalize_phone_value(phone.value, default_country)
+            if not normalized_value:
+                continue
+            existing_label = all_phones.get(normalized_value)
+            if existing_label:
+                # Prefer non-empty labels or keep existing confident label
+                if phone.label and not existing_label:
+                    all_phones[normalized_value] = phone.label
+            else:
+                all_phones[normalized_value] = phone.label
+            if not is_confident:
+                trimmed = phone.value.strip()
+                if trimmed and trimmed not in all_phones:
+                    all_phones[trimmed] = phone.label
         for address in record.addresses:
             as_dict = address.to_dict()
             key = json.dumps(as_dict, sort_keys=True)
@@ -434,7 +505,9 @@ def build(
     merged_contacts: List[ContactRecord] = []
     lineage_records: List[LineageEntry] = []
     for indices in clusters.values():
-        merged, lineage = _merge_cluster(indices, normalized_records)
+        merged, lineage = _merge_cluster(
+            indices, normalized_records, normalization_settings.default_phone_country
+        )
         merged_contacts.append(merged)
         lineage_records.extend(lineage)
 

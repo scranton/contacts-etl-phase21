@@ -299,10 +299,14 @@ def format_phone_e164_safe(value: str, default_country: str = "US") -> str:
             formatted = f"+1{digits}"
         elif len(digits) == 11 and digits.startswith("1"):
             formatted = f"+{digits}"
+        elif len(digits) > 11:
+            formatted = s
         elif s.startswith("+"):
             formatted = re.sub(r"[^\d+]", "", s)
         else:
             formatted = f"+1{digits}" if digits else ""
+    if not formatted:
+        formatted = s
     return formatted
 
 
@@ -325,12 +329,20 @@ def read_csv_with_optional_header(
     return pd.read_csv(StringIO("\n".join(lines[header_idx:])), dtype=str, keep_default_na=False)
 
 
+def _coerce_to_string(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value or "").strip()
+
+
 def safe_get(row: Any, key: str) -> str:
     try:
-        return str(row.get(key, "") or "").strip()
+        return _coerce_to_string(row.get(key, ""))
     except (AttributeError, KeyError, TypeError):
         try:
-            return str(row[key] if key in row else "").strip()
+            if hasattr(row, "__contains__") and key in row:
+                return _coerce_to_string(row[key])
+            return ""
         except (KeyError, TypeError, AttributeError):
             return ""
 
@@ -452,36 +464,60 @@ def strip_suffixes_and_parse_name(
 
 def normalize_email_collection(
     values: Sequence[Email], check_deliverability: bool = False
-) -> List[Email]:
+) -> Tuple[List[Email], List[str]]:
     out: List[Email] = []
     seen: Set[str] = set()
+    invalid: List[str] = []
     for entry in values:
         normalized_value = validate_email_safe(
             entry.value, check_deliverability=check_deliverability
         )
         if not normalized_value:
+            if entry.value:
+                invalid.append(entry.value.strip())
             continue
         if normalized_value in seen:
             continue
         seen.add(normalized_value)
         out.append(Email(value=normalized_value, label=entry.label))
-    return out
+    return out, invalid
 
 
-def normalize_phone_collection(values: Sequence[Phone], default_country: str) -> List[Phone]:
+def normalize_phone_collection(
+    values: Sequence[Phone], default_country: str
+) -> Tuple[List[Phone], List[str]]:
     out: List[Phone] = []
     seen: Set[str] = set()
+    non_standard: List[str] = []
     for entry in values:
-        formatted = format_phone_e164_safe(entry.value, default_country=default_country)
-        if not formatted:
+        raw_value = entry.value or ""
+        formatted = format_phone_e164_safe(raw_value, default_country=default_country)
+        candidate = ""
+        is_confident = False
+
+        if formatted and is_valid_phone_safe(formatted):
+            candidate = formatted
+            is_confident = True
+        else:
+            compact = re.sub(r"\s+", "", raw_value)
+            if compact and compact != raw_value:
+                formatted = format_phone_e164_safe(compact, default_country=default_country)
+                if formatted and is_valid_phone_safe(formatted):
+                    candidate = formatted
+                    is_confident = True
+        if not candidate:
+            candidate = raw_value.strip()
+        if not candidate:
             continue
-        if not is_valid_phone_safe(formatted):
+        if candidate in seen:
             continue
-        if formatted in seen:
-            continue
-        seen.add(formatted)
-        out.append(Phone(value=formatted, label=entry.label))
-    return out
+        seen.add(candidate)
+        out.append(Phone(value=candidate, label=entry.label))
+        if not is_confident:
+            trimmed_raw = raw_value.strip()
+            if trimmed_raw:
+                non_standard.append(trimmed_raw)
+    return out, non_standard
 
 
 def normalize_address(address: Address) -> Address:
@@ -602,12 +638,14 @@ for root, variants in _NICKMAP.items():
 def choose_best_first_name(records: Sequence[ContactRecord]) -> Tuple[str, str]:
     counts: Dict[str, float] = {}
     casing: Dict[str, str] = {}
+    explicit: Dict[str, bool] = {}
     for record in records:
         if record.first_name:
             weight = 2.0 if record.source.lower() == "linkedin" else 1.0
             key = record.first_name.lower()
             counts[key] = counts.get(key, 0.0) + weight
             casing.setdefault(key, record.first_name)
+            explicit[key] = True
         for email in record.emails:
             local = email.value.split("@", 1)[0] if "@" in email.value else ""
             first_guess = guess_name_from_email_local(local)[0]
@@ -615,20 +653,30 @@ def choose_best_first_name(records: Sequence[ContactRecord]) -> Tuple[str, str]:
                 key = first_guess.lower()
                 counts[key] = counts.get(key, 0.0) + 1.5
                 casing.setdefault(key, first_guess.title())
+                explicit.setdefault(key, False)
     if not counts:
         return "", ""
     merged: Dict[str, float] = {}
+    merged_explicit: Dict[str, bool] = {}
     for key in counts:
         if key in merged:
             continue
         merged[key] = counts[key]
+        merged_explicit[key] = explicit.get(key, False)
         for other in counts:
             if other == key or other in merged:
                 continue
             if seq_ratio(key, other) >= 0.9:
                 merged[key] += counts[other]
+                merged_explicit[key] = merged_explicit[key] or explicit.get(other, False)
                 merged[other] = -1.0
-    best_key = max((k for k, score in merged.items() if score >= 0), key=lambda k: merged[k])
+                merged_explicit[other] = merged_explicit.get(other, False)
+    candidates = [k for k, score in merged.items() if score >= 0]
+    if not candidates:
+        return "", ""
+    explicit_candidates = [k for k in candidates if merged_explicit.get(k, False)]
+    target_pool = explicit_candidates or candidates
+    best_key = max(target_pool, key=lambda k: merged[k])
     return casing.get(best_key, best_key.title()), best_key
 
 
@@ -713,8 +761,20 @@ def normalize_contact_record(
         if part
     ).strip()
 
-    record.emails = normalize_email_collection(record.emails)
-    record.phones = normalize_phone_collection(record.phones, settings.default_phone_country)
+    if record.extra is None:
+        record.extra = {}
+
+    record.emails, invalid_emails = normalize_email_collection(record.emails)
+    if invalid_emails:
+        record.extra.setdefault("invalid_emails", []).extend(invalid_emails)
+
+    normalized_phones, non_standard_phones = normalize_phone_collection(
+        record.phones, settings.default_phone_country
+    )
+    record.phones = normalized_phones
+    if non_standard_phones:
+        record.extra.setdefault("non_standard_phones", []).extend(non_standard_phones)
+
     record.addresses = normalize_address_collection(record.addresses)
 
     return record
