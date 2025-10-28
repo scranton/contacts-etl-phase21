@@ -256,7 +256,10 @@ def validate_email_safe(raw: str, check_deliverability: bool = False) -> str:
         return ""
     if HAS_EMAIL_VALIDATOR:
         try:
-            return validate_email(candidate, check_deliverability=check_deliverability).normalized  # type: ignore[arg-type]
+            validation_result = validate_email(
+                candidate, check_deliverability=check_deliverability
+            )
+            return validation_result.normalized  # type: ignore[arg-type]
         except EmailNotValidError:
             return ""
     candidate = candidate.replace(" ", "").lower()
@@ -269,7 +272,8 @@ def is_valid_phone_safe(value: str) -> bool:
         return False
     if HAS_PHONENUMBERS:
         try:
-            parsed = phonenumbers.parse(s, None if s.startswith("+") else "US")  # type: ignore[arg-type]
+            region = None if s.startswith("+") else "US"
+            parsed = phonenumbers.parse(s, region)  # type: ignore[arg-type]
             return phonenumbers.is_possible_number(parsed) and phonenumbers.is_valid_number(parsed)
         except NumberParseException:
             return False
@@ -284,7 +288,8 @@ def format_phone_e164_safe(value: str, default_country: str = "US") -> str:
     formatted = ""
     if HAS_PHONENUMBERS:
         try:
-            parsed = phonenumbers.parse(s, None if s.startswith("+") else default_country)  # type: ignore[arg-type]
+            region = None if s.startswith("+") else default_country
+            parsed = phonenumbers.parse(s, region)  # type: ignore[arg-type]
             formatted = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
         except NumberParseException:
             logger.debug("phonenumbers.parse failed for %s", s)
@@ -670,7 +675,6 @@ def normalize_contact_record(
     )
     record.full_name = full_name_clean or record.full_name
 
-    cleaned_emails: List[Email] = []
     for field_name in ("first_name", "middle_name", "last_name"):
         val = getattr(record, field_name)
         new_val = strip_emails_from_text_and_capture(val, record.emails)

@@ -5,8 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Set
 
-from .models import ContactRecord
-from .normalization import safe_get, warn_missing
+from .normalization import safe_get
 
 MARTIAL_KWS = [r"tai\s*chi", r"wu\s*an", r"wu\s*dao", r"kung\s*fu", r"shaolin", r"martial\s*arts"]
 NUTCRACKER_KWS = [r"nutcracker", r"\bcherub(s)?\b", r"jose\s*mateo", r"ballet"]
@@ -123,4 +122,4 @@ class TagEngine:
         return int(min(100, round(score, 0)))
 
 
-__all__ = ["TaggingSettings", "TagEngine", "warn_missing"]
+__all__ = ["TaggingSettings", "TagEngine"]

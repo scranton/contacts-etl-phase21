@@ -25,7 +25,14 @@ def test_safe_get_and_warn_missing(tmp_path):
 
 
 def test_read_csv_with_optional_header(tmp_path):
-    content = "noise line 1\nnoise line 2\nFirst Name,Last Name,URL\nJohn,Doe,https://linkedin.com/in/jdoe\n"
+    content_lines = [
+        "noise line 1",
+        "noise line 2",
+        "First Name,Last Name,URL",
+        "John,Doe,https://linkedin.com/in/jdoe",
+        "",
+    ]
+    content = "\n".join(content_lines)
     path = tmp_path / "lin.csv"
     path.write_text(content, encoding="utf-8")
     df = read_csv_with_optional_header(str(path), header_starts_with="First Name,Last Name,URL")
@@ -122,10 +129,7 @@ def test_tag_contacts_merges_vcf_notes(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
-            [
-                f"outputs:",
-                f'  dir: "{tmp_path}"',
-            ]
+            ["outputs:", f'  dir: "{tmp_path}"']
         ),
         encoding="utf-8",
     )

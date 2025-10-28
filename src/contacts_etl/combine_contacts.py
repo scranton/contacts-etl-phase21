@@ -351,9 +351,6 @@ def _merge_cluster(
     deduped_addresses_json = json.dumps(all_addresses, ensure_ascii=False)
 
     full_name_clean = " ".join(filter(None, [best_first, middle, last, suffix])).strip()
-    emails_str = "|".join(f"{value}::{label}" for value, label in sorted(all_emails.items()))
-    phones_str = "|".join(f"{value}::{label}" for value, label in sorted(all_phones.items()))
-
     lineage_keys = [
         f"{record.source}:{record.source_row_id}"
         for record in cluster_records

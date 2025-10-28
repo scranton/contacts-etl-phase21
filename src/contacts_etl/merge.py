@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Tuple
+from typing import Iterable
 
 from .models import ContactRecord
 from .normalization import address_keys_for_match, nickname_equivalent, seq_ratio

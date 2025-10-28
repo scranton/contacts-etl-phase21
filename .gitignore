@@ -3,3 +3,7 @@
 /data/
 /output/
 /.coverage
+.direnv/
+.venv/
+__pycache__/
+*.pyc

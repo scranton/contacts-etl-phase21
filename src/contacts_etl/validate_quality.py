@@ -8,14 +8,6 @@ import pandas as pd
 
 from .common import is_valid_phone_safe, validate_email_safe
 
-# Optional libs
-try:
-    import usaddress
-
-    HAS_USADDRESS = True
-except (ImportError, ModuleNotFoundError):
-    HAS_USADDRESS = False
-
 
 def pct(n, d):
     return round((n / d * 100.0), 2) if d else 0.0

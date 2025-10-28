@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from .config_loader import PipelineConfig, load_pipeline_config
 from .merge import MergeEvaluator, MergeSignals

@@ -1,7 +1,7 @@
 import argparse
 import csv
 import os
-from typing import Any, Dict, Tuple
+from typing import Dict, Tuple
 
 import pandas as pd
 

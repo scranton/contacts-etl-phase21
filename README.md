@@ -7,7 +7,7 @@ Merge contacts exported from macOS Contacts (vCard), Gmail, and LinkedIn into a 
 
 ## Requirements
 
-- Python **3.9 – 3.11**
+- Python **3.10 – 3.12**
 - `pip` (or `uv`, `pipx`, etc.) for dependency management
 - Optional extras:
   - `validation` extra enables email/phone validation (`email-validator`, `phonenumberslite`, `dnspython`, `usaddress`)
@@ -99,6 +99,15 @@ contacts-etl-phase21/
    ```
 
 4. Configure *Run Task* definitions if you prefer one-click execution of pipeline stages.
+
+---
+
+## Analysis Notebooks
+
+- `scripts/confidence_insights.ipynb` — highlights the top 25 contacts from `confidence_report.csv` in the `very_high` and `high` buckets, including source counts and available contact channels.
+- `scripts/referral_insights.ipynb` — surfaces the highest `referral_priority_score` entries from `referral_targets.csv` (or `tagged_contacts.csv` as a fallback) so you can line up warm introductions quickly.
+
+Open either notebook in VS Code Jupyter (Python 3.10+ kernel) after regenerating the pipeline outputs to explore the latest results.
 
 ---
 
