@@ -8,7 +8,6 @@ from typing import Dict, Iterable, List, Set
 from .models import ContactRecord
 from .normalization import safe_get, warn_missing
 
-
 MARTIAL_KWS = [r"tai\s*chi", r"wu\s*an", r"wu\s*dao", r"kung\s*fu", r"shaolin", r"martial\s*arts"]
 NUTCRACKER_KWS = [r"nutcracker", r"\bcherub(s)?\b", r"jose\s*mateo", r"ballet"]
 
@@ -71,7 +70,10 @@ class TagEngine:
             tags.add("work_colleague")
 
         domains = _extract_domain_set(safe_get(row, "emails"))
-        if any(any(prior in domain for prior in self.settings.normalized_domains()) for domain in domains):
+        if any(
+            any(prior in domain for prior in self.settings.normalized_domains())
+            for domain in domains
+        ):
             tags.add("work_colleague")
 
         try:
@@ -82,7 +84,9 @@ class TagEngine:
         for address in addresses:
             city = safe_get(address, "city").lower()
             state = safe_get(address, "state").lower()
-            if state == "ma" and (city in local_cities or any(city == lc or lc in city for lc in local_cities)):
+            if state == "ma" and (
+                city in local_cities or any(city == lc or lc in city for lc in local_cities)
+            ):
                 tags.add("local_south_shore")
                 break
 
@@ -97,9 +101,18 @@ class TagEngine:
         return tags, primary
 
     @staticmethod
-    def compute_referral_priority(row: Dict[str, str], confidence_weight: float = 0.6, tag_weights: Dict[str, int] | None = None) -> int:
+    def compute_referral_priority(
+        row: Dict[str, str],
+        confidence_weight: float = 0.6,
+        tag_weights: Dict[str, int] | None = None,
+    ) -> int:
         if tag_weights is None:
-            tag_weights = {"martial_arts": 30, "nutcracker_performance": 25, "work_colleague": 20, "local_south_shore": 10}
+            tag_weights = {
+                "martial_arts": 30,
+                "nutcracker_performance": 25,
+                "work_colleague": 20,
+                "local_south_shore": 10,
+            }
         try:
             confidence = float(row.get("confidence_score", 0) or 0)
         except (TypeError, ValueError):

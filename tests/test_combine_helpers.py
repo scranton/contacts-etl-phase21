@@ -6,7 +6,12 @@ import pytest
 
 from contacts_etl import combine_contacts as cc
 from contacts_etl import tag_contacts as tag
-from contacts_etl.common import ContactRecord, read_csv_with_optional_header, safe_get, warn_missing
+from contacts_etl.common import (
+    ContactRecord,
+    read_csv_with_optional_header,
+    safe_get,
+    warn_missing,
+)
 from contacts_etl.models import Address, Phone
 from contacts_etl.normalization import format_phone_e164_safe, is_valid_phone_safe
 
@@ -119,7 +124,7 @@ def test_tag_contacts_merges_vcf_notes(tmp_path):
         "\n".join(
             [
                 f"outputs:",
-                f"  dir: \"{tmp_path}\"",
+                f'  dir: "{tmp_path}"',
             ]
         ),
         encoding="utf-8",
@@ -140,8 +145,12 @@ def test_tag_contacts_merges_vcf_notes(tmp_path):
 
 
 def test_build_respects_nickname_equivalence(monkeypatch):
-    base_record = ContactRecord(source="gmail", source_row_id="0", first_name="Bill", last_name="Doe")
-    other_record = ContactRecord(source="gmail", source_row_id="1", first_name="William", last_name="Doe")
+    base_record = ContactRecord(
+        source="gmail", source_row_id="0", first_name="Bill", last_name="Doe"
+    )
+    other_record = ContactRecord(
+        source="gmail", source_row_id="1", first_name="William", last_name="Doe"
+    )
 
     monkeypatch.setattr(cc, "_load_sources", lambda config: [base_record, other_record])
 
@@ -173,13 +182,19 @@ def test_build_keeps_distinct_household_members(monkeypatch):
     alex = ContactRecord(source="gmail", source_row_id="0", first_name="Alex", last_name="Resident")
     alex.phones = [Phone(value="+15550000001", label="home")]
     alex.addresses = [
-        Address(street="123 Elm St", city="Sampleville", state="MA", postal_code="02144", country="US")
+        Address(
+            street="123 Elm St", city="Sampleville", state="MA", postal_code="02144", country="US"
+        )
     ]
 
-    riley = ContactRecord(source="gmail", source_row_id="1", first_name="Riley", last_name="Resident")
+    riley = ContactRecord(
+        source="gmail", source_row_id="1", first_name="Riley", last_name="Resident"
+    )
     riley.phones = [Phone(value="+15550000002", label="home")]
     riley.addresses = [
-        Address(street="123 Elm St", city="Sampleville", state="MA", postal_code="02144", country="US")
+        Address(
+            street="123 Elm St", city="Sampleville", state="MA", postal_code="02144", country="US"
+        )
     ]
 
     monkeypatch.setattr(cc, "_load_sources", lambda config: [alex, riley])

@@ -33,13 +33,38 @@ from .models import Address, Phone
 logger = logging.getLogger(__name__)
 
 DEFAULT_GEN = {"jr", "sr", "ii", "iii", "iv", "v", "vi"}
-DEFAULT_PROF = {"phd", "pmp", "csm", "spc6", "mba", "cissp", "crisc", "cscp", "cams", "cpa", "cfa", "pe", "cisa", "cism", "cfe", "cma", "ceh", "itil", "sixsigma", "leansixsigma", "esq", "jd"}
+DEFAULT_PROF = {
+    "phd",
+    "pmp",
+    "csm",
+    "spc6",
+    "mba",
+    "cissp",
+    "crisc",
+    "cscp",
+    "cams",
+    "cpa",
+    "cfa",
+    "pe",
+    "cisa",
+    "cism",
+    "cfe",
+    "cma",
+    "ceh",
+    "itil",
+    "sixsigma",
+    "leansixsigma",
+    "esq",
+    "jd",
+}
 
 
 def _build_normalization_settings(config: PipelineConfig) -> NormalizationSettings:
     keep_suffixes = config.normalization.keep_generational_suffixes or list(DEFAULT_GEN)
     prof_suffixes = config.normalization.professional_suffixes or list(DEFAULT_PROF)
-    return NormalizationSettings.from_args(keep_suffixes, prof_suffixes, config.normalization.default_phone_country)
+    return NormalizationSettings.from_args(
+        keep_suffixes, prof_suffixes, config.normalization.default_phone_country
+    )
 
 
 def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
@@ -92,16 +117,22 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             address = Address(
                 po_box=safe_get(row, f"Address {n} - PO Box"),
                 extended="",  # or pull a real field if one exists in the CSV
-                street=safe_get(row, f"Address {n} - Street") or safe_get(row, f"Address {n} - Formatted"),
+                street=safe_get(row, f"Address {n} - Street")
+                or safe_get(row, f"Address {n} - Formatted"),
                 city=safe_get(row, f"Address {n} - City"),
                 state=safe_get(row, f"Address {n} - Region"),
                 postal_code=safe_get(row, f"Address {n} - Postal Code"),
                 country=safe_get(row, f"Address {n} - Country"),
                 label=safe_get(row, f"Address {n} - Label"),
             )
-            if any(getattr(address, field) for field in ("street", "city", "state", "postal_code", "country", "po_box")):
+            if any(
+                getattr(address, field)
+                for field in ("street", "city", "state", "postal_code", "country", "po_box")
+            ):
                 addresses.append(address)
-        raw_full = " ".join([safe_get(row, "First Name"), safe_get(row, "Middle Name"), safe_get(row, "Last Name")]).strip()
+        raw_full = " ".join(
+            [safe_get(row, "First Name"), safe_get(row, "Middle Name"), safe_get(row, "Last Name")]
+        ).strip()
         record = ContactRecord(
             full_name_raw=raw_full,
             suffix=safe_get(row, "Name Suffix"),
@@ -138,7 +169,17 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                 record.middle_name = components[2].strip() if len(components) > 2 else ""
                 record.suffix = components[3].strip() if len(components) > 3 else ""
                 if not record.full_name_raw:
-                    record.full_name_raw = " ".join(filter(None, [record.first_name, record.middle_name, record.last_name, record.suffix])).strip()
+                    record.full_name_raw = " ".join(
+                        filter(
+                            None,
+                            [
+                                record.first_name,
+                                record.middle_name,
+                                record.last_name,
+                                record.suffix,
+                            ],
+                        )
+                    ).strip()
             elif "EMAIL" in line and ":" in line:
                 value = line.split(":", 1)[1].strip()
                 record.emails.append(Email(value=value, label=""))
@@ -177,7 +218,9 @@ def _load_sources(config: PipelineConfig) -> List[ContactRecord]:
     return records
 
 
-def _normalize_records(records: List[ContactRecord], settings: NormalizationSettings) -> List[ContactRecord]:
+def _normalize_records(
+    records: List[ContactRecord], settings: NormalizationSettings
+) -> List[ContactRecord]:
     normalized: List[ContactRecord] = []
     for record in records:
         normalized.append(normalize_contact_record(replace(record), settings))
@@ -192,7 +235,9 @@ def _bucket_records(records: List[ContactRecord]) -> Dict[str, List[int]]:
     return buckets
 
 
-def _cluster_indices(records: List[ContactRecord], evaluator: MergeEvaluator, config: PipelineConfig) -> Dict[int, List[int]]:
+def _cluster_indices(
+    records: List[ContactRecord], evaluator: MergeEvaluator, config: PipelineConfig
+) -> Dict[int, List[int]]:
     parent: Dict[int, int] = {}
 
     def find(x: int) -> int:
@@ -219,27 +264,41 @@ def _cluster_indices(records: List[ContactRecord], evaluator: MergeEvaluator, co
                 relaxed = config.dedupe.relaxed_merge_threshold
                 first_threshold = config.dedupe.first_name_similarity_threshold
 
-                ok = (score >= high) or (signals.first_similarity >= first_threshold and score >= relaxed)
+                ok = (score >= high) or (
+                    signals.first_similarity >= first_threshold and score >= relaxed
+                )
 
-                either_nameless = not (left.first_name and left.last_name) or not (right.first_name and right.last_name)
+                either_nameless = not (left.first_name and left.last_name) or not (
+                    right.first_name and right.last_name
+                )
                 if either_nameless and not signals.has_corroborator:
                     ok = False
 
                 if left.first_name and right.first_name:
                     left_first = normalize_text_key(left.first_name)
                     right_first = normalize_text_key(right.first_name)
-                    nickname_eq = evaluator.nickname_equivalence and nickname_equivalent(left.first_name, right.first_name)
+                    nickname_eq = evaluator.nickname_equivalence and nickname_equivalent(
+                        left.first_name, right.first_name
+                    )
                     names_align = bool(left_first and right_first and left_first == right_first)
-                    linkedin_match = bool(left.linkedin_url and left.linkedin_url == right.linkedin_url)
+                    linkedin_match = bool(
+                        left.linkedin_url and left.linkedin_url == right.linkedin_url
+                    )
                     if not (names_align or nickname_eq or signals.emails_overlap or linkedin_match):
                         ok = False
 
                 if left.source.lower() == "linkedin" or right.source.lower() == "linkedin":
                     if not signals.emails_overlap:
-                        last_eq = normalize_text_key(left.last_name) == normalize_text_key(right.last_name)
+                        last_eq = normalize_text_key(left.last_name) == normalize_text_key(
+                            right.last_name
+                        )
                         gen_eq = normalize_text_key(left.suffix) == normalize_text_key(right.suffix)
-                        first_eq = normalize_text_key(left.first_name) == normalize_text_key(right.first_name)
-                        nickname_eq = evaluator.nickname_equivalence and nickname_equivalent(left.first_name, right.first_name)
+                        first_eq = normalize_text_key(left.first_name) == normalize_text_key(
+                            right.first_name
+                        )
+                        nickname_eq = evaluator.nickname_equivalence and nickname_equivalent(
+                            left.first_name, right.first_name
+                        )
                         if not (last_eq and (first_eq or nickname_eq) and gen_eq):
                             ok = False
 
@@ -255,7 +314,9 @@ def _cluster_indices(records: List[ContactRecord], evaluator: MergeEvaluator, co
     return clusters
 
 
-def _merge_cluster(indices: List[int], records: List[ContactRecord]) -> Tuple[ContactRecord, List[LineageEntry]]:
+def _merge_cluster(
+    indices: List[int], records: List[ContactRecord]
+) -> Tuple[ContactRecord, List[LineageEntry]]:
     cluster_records = [records[idx] for idx in indices]
     best_first, _ = choose_best_first_name(cluster_records)
 
@@ -264,7 +325,9 @@ def _merge_cluster(indices: List[int], records: List[ContactRecord]) -> Tuple[Co
     last = next((record.last_name for record in cluster_records if record.last_name), "")
     maiden = next((record.maiden_name for record in cluster_records if record.maiden_name), "")
     suffix = next((record.suffix for record in cluster_records if record.suffix), "")
-    prof_suffixes = next((record.suffix_professional for record in cluster_records if record.suffix_professional), "")
+    prof_suffixes = next(
+        (record.suffix_professional for record in cluster_records if record.suffix_professional), ""
+    )
     company = next((record.company for record in cluster_records if record.company), "")
     title = next((record.title for record in cluster_records if record.title), "")
     linkedin = next((record.linkedin_url for record in cluster_records if record.linkedin_url), "")
@@ -339,7 +402,9 @@ def _merge_cluster(indices: List[int], records: List[ContactRecord]) -> Tuple[Co
                 source_title=record.title,
                 source_emails="|".join(email.value for email in record.emails),
                 source_phones="|".join(phone.value for phone in record.phones),
-                source_addresses_json=json.dumps([address.to_dict() for address in record.addresses], ensure_ascii=False),
+                source_addresses_json=json.dumps(
+                    [address.to_dict() for address in record.addresses], ensure_ascii=False
+                ),
             )
         )
 
@@ -351,7 +416,9 @@ def _merge_cluster(indices: List[int], records: List[ContactRecord]) -> Tuple[Co
     return merged, lineage_entries
 
 
-def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def build(
+    args: argparse.Namespace, config: Optional[PipelineConfig] = None
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     config = config or load_config(args)
     normalization_settings = _build_normalization_settings(config)
 
@@ -399,7 +466,9 @@ def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None) -> 
         duplicates = contacts_df[contacts_df["contact_id"].duplicated(keep=False)]
         if not duplicates.empty:
             duplicate_ids = ", ".join(sorted(duplicates["contact_id"].unique())[:5])
-            raise ValueError(f"duplicate contact_id detected in consolidated output: {duplicate_ids}")
+            raise ValueError(
+                f"duplicate contact_id detected in consolidated output: {duplicate_ids}"
+            )
 
     lineage_df = pd.DataFrame(lineage_rows)
     return contacts_df, lineage_df

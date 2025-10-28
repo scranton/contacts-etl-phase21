@@ -72,9 +72,12 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
     outputs = OutputsConfig(dir=outputs_dir)
 
     normalization = NormalizationConfig(
-        default_phone_country=getattr(args, "default_phone_country", None) or normalization_cfg.get("default_phone_country", "US"),
-        keep_generational_suffixes=getattr(args, "keep_generational_suffixes", None) or normalization_cfg.get("keep_generational_suffixes"),
-        professional_suffixes=getattr(args, "professional_suffixes", None) or normalization_cfg.get("professional_suffixes"),
+        default_phone_country=getattr(args, "default_phone_country", None)
+        or normalization_cfg.get("default_phone_country", "US"),
+        keep_generational_suffixes=getattr(args, "keep_generational_suffixes", None)
+        or normalization_cfg.get("keep_generational_suffixes"),
+        professional_suffixes=getattr(args, "professional_suffixes", None)
+        or normalization_cfg.get("professional_suffixes"),
     )
 
     dedupe = DedupeConfig(
@@ -85,13 +88,17 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         ),
         first_name_similarity_threshold=getattr(args, "first_name_similarity_threshold", None)
         or dedupe_cfg.get("first_name_similarity_threshold", 0.88),
-        merge_score_threshold=getattr(args, "merge_score_threshold", None) or dedupe_cfg.get("merge_score_threshold", 1.2),
-        relaxed_merge_threshold=getattr(args, "relaxed_merge_threshold", None) or dedupe_cfg.get("relaxed_merge_threshold", 0.6),
-        require_corroborator=getattr(args, "require_corroborator", None) or dedupe_cfg.get("require_corroborator", False),
+        merge_score_threshold=getattr(args, "merge_score_threshold", None)
+        or dedupe_cfg.get("merge_score_threshold", 1.2),
+        relaxed_merge_threshold=getattr(args, "relaxed_merge_threshold", None)
+        or dedupe_cfg.get("relaxed_merge_threshold", 0.6),
+        require_corroborator=getattr(args, "require_corroborator", None)
+        or dedupe_cfg.get("require_corroborator", False),
     )
 
     validation = ValidationConfig(
-        email_dns_mx_check=getattr(args, "email_dns_mx", None) or validation_cfg.get("email_dns_mx_check", False),
+        email_dns_mx_check=getattr(args, "email_dns_mx", None)
+        or validation_cfg.get("email_dns_mx_check", False),
     )
 
     tagging = TaggingConfig(

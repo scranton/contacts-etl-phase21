@@ -58,7 +58,12 @@ class MergeEvaluator:
             score += 0.8
             corroborators += 1
 
-        return MergeSignals(score=score, corroborators=corroborators, first_similarity=first_similarity, emails_overlap=emails_overlap)
+        return MergeSignals(
+            score=score,
+            corroborators=corroborators,
+            first_similarity=first_similarity,
+            emails_overlap=emails_overlap,
+        )
 
     @staticmethod
     def either_nameless(records: Iterable[ContactRecord]) -> bool:

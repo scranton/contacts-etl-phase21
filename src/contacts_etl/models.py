@@ -97,15 +97,21 @@ class ContactRecord:
 
     @staticmethod
     def _ensure_email_list(values: Sequence[Any]) -> List[Email]:
-        return [value if isinstance(value, Email) else Email.from_mapping(value) for value in values]
+        return [
+            value if isinstance(value, Email) else Email.from_mapping(value) for value in values
+        ]
 
     @staticmethod
     def _ensure_phone_list(values: Sequence[Any]) -> List[Phone]:
-        return [value if isinstance(value, Phone) else Phone.from_mapping(value) for value in values]
+        return [
+            value if isinstance(value, Phone) else Phone.from_mapping(value) for value in values
+        ]
 
     @staticmethod
     def _ensure_address_list(values: Sequence[Any]) -> List[Address]:
-        return [value if isinstance(value, Address) else Address.from_mapping(value) for value in values]
+        return [
+            value if isinstance(value, Address) else Address.from_mapping(value) for value in values
+        ]
 
     @classmethod
     def from_mapping(cls, payload: Dict[str, Any]) -> "ContactRecord":

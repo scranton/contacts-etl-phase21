@@ -15,7 +15,19 @@ from .tagging import TagEngine, TaggingSettings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOCAL_CITIES = ["braintree", "quincy", "weymouth", "dedham", "milton", "hingham", "needham", "brookline", "cambridge", "somerville", "boston"]
+DEFAULT_LOCAL_CITIES = [
+    "braintree",
+    "quincy",
+    "weymouth",
+    "dedham",
+    "milton",
+    "hingham",
+    "needham",
+    "brookline",
+    "cambridge",
+    "somerville",
+    "boston",
+]
 
 
 def _load_gmail_notes(path: Optional[str]) -> Dict[str, str]:
@@ -53,16 +65,26 @@ def _load_vcf_notes(path: Optional[str]) -> Dict[str, str]:
 
 def _resolve_paths(args: argparse.Namespace, config: PipelineConfig) -> tuple[str, str, str]:
     outputs_dir = config.outputs.dir
-    contacts_csv = getattr(args, "contacts_csv", None) or config.inputs.get("contacts_csv") or str(outputs_dir / "consolidated_contacts.csv")
-    lineage_csv = getattr(args, "lineage_csv", None) or str(outputs_dir / "consolidated_lineage.csv")
+    contacts_csv = (
+        getattr(args, "contacts_csv", None)
+        or config.inputs.get("contacts_csv")
+        or str(outputs_dir / "consolidated_contacts.csv")
+    )
+    lineage_csv = getattr(args, "lineage_csv", None) or str(
+        outputs_dir / "consolidated_lineage.csv"
+    )
     out_dir = getattr(args, "out_dir", None) or outputs_dir
     return contacts_csv, lineage_csv, str(out_dir)
 
 
-def _build_notes_map(lineage_csv: str, gmail_notes: Dict[str, str], vcf_notes: Dict[str, str]) -> Dict[str, str]:
+def _build_notes_map(
+    lineage_csv: str, gmail_notes: Dict[str, str], vcf_notes: Dict[str, str]
+) -> Dict[str, str]:
     notes: Dict[str, str] = {}
     try:
-        lineage_df = pd.read_csv(lineage_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
+        lineage_df = pd.read_csv(
+            lineage_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL
+        )
     except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as exc:
         logger.warning("Unable to build notes map from lineage: %s", exc)
         return notes
@@ -91,7 +113,9 @@ def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None):
     df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
     confidence_path = config.outputs.dir / "confidence_report.csv"
     if confidence_path.exists():
-        conf_df = pd.read_csv(confidence_path, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)[["contact_id", "confidence_score"]]
+        conf_df = pd.read_csv(
+            confidence_path, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL
+        )[["contact_id", "confidence_score"]]
         df = df.merge(conf_df, on="contact_id", how="left")
 
     tagging_settings = TaggingSettings(
@@ -122,8 +146,7 @@ def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None):
 
     try:
         df["referral_priority_score"] = [
-            TagEngine.compute_referral_priority(record)
-            for record in df.to_dict(orient="records")
+            TagEngine.compute_referral_priority(record) for record in df.to_dict(orient="records")
         ]
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("Unable to calculate referral_priority_score: %s", exc)
@@ -142,7 +165,9 @@ def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tag and categorize contacts; compute referral priority.")
+    parser = argparse.ArgumentParser(
+        description="Tag and categorize contacts; compute referral priority."
+    )
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--contacts-csv", type=str, default=None)
     parser.add_argument("--lineage-csv", type=str, default=None)

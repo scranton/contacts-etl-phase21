@@ -179,7 +179,30 @@ STATE_ABBR = {
     "dc": "DC",
 }
 
-PARTICLES = {"da", "de", "del", "della", "der", "di", "la", "le", "van", "von", "den", "ten", "ter", "du", "st", "st.", "san", "mac", "mc", "o", "d", "l"}
+PARTICLES = {
+    "da",
+    "de",
+    "del",
+    "della",
+    "der",
+    "di",
+    "la",
+    "le",
+    "van",
+    "von",
+    "den",
+    "ten",
+    "ter",
+    "du",
+    "st",
+    "st.",
+    "san",
+    "mac",
+    "mc",
+    "o",
+    "d",
+    "l",
+}
 
 
 @dataclass
@@ -189,7 +212,12 @@ class NormalizationSettings:
     default_phone_country: str = "US"
 
     @classmethod
-    def from_args(cls, keep_generational_suffixes: Optional[Iterable[str]], professional_suffixes: Optional[Iterable[str]], default_phone_country: str = "US") -> "NormalizationSettings":
+    def from_args(
+        cls,
+        keep_generational_suffixes: Optional[Iterable[str]],
+        professional_suffixes: Optional[Iterable[str]],
+        default_phone_country: str = "US",
+    ) -> "NormalizationSettings":
         return cls(
             keep_generational_suffixes=set(s.lower() for s in (keep_generational_suffixes or [])),
             professional_suffixes=set(s.lower() for s in (professional_suffixes or [])),
@@ -273,7 +301,9 @@ def format_phone_e164_safe(value: str, default_country: str = "US") -> str:
     return formatted
 
 
-def read_csv_with_optional_header(path: Optional[str], header_starts_with: Optional[str] = None) -> pd.DataFrame:
+def read_csv_with_optional_header(
+    path: Optional[str], header_starts_with: Optional[str] = None
+) -> pd.DataFrame:
     if not path:
         return pd.DataFrame()
     if not header_starts_with:
@@ -307,7 +337,9 @@ def warn_missing(path: Optional[str], label: str) -> bool:
     return False
 
 
-def uniq_list_of_dicts(values: Sequence[Dict[str, Any]], key: str = "value") -> List[Dict[str, Any]]:
+def uniq_list_of_dicts(
+    values: Sequence[Dict[str, Any]], key: str = "value"
+) -> List[Dict[str, Any]]:
     seen: Set[str] = set()
     results: List[Dict[str, Any]] = []
     for entry in values:
@@ -337,7 +369,9 @@ def parse_name_multi_last(name_str: str) -> Tuple[str, str, str]:
     while idx >= 1:
         token = tokens[idx]
         token_clean = (token or "").lower().strip(".")
-        if token_clean in PARTICLES or (token_clean in {"o", "d", "l"} and idx + 1 < len(tokens) and "'" in tokens[idx + 1]):
+        if token_clean in PARTICLES or (
+            token_clean in {"o", "d", "l"} and idx + 1 < len(tokens) and "'" in tokens[idx + 1]
+        ):
             last_parts.insert(0, token)
             idx -= 1
             continue
@@ -352,7 +386,9 @@ def parse_name_multi_last(name_str: str) -> Tuple[str, str, str]:
     return first, middle, last
 
 
-def strip_suffixes_and_parse_name(full_name: str, gen_suffixes: Set[str], prof_suffixes: Set[str]) -> Tuple[str, str, str, str, List[str], str, str]:
+def strip_suffixes_and_parse_name(
+    full_name: str, gen_suffixes: Set[str], prof_suffixes: Set[str]
+) -> Tuple[str, str, str, str, List[str], str, str]:
     if not full_name or str(full_name).strip() == "":
         return "", "", "", "", [], "", ""
     name = str(full_name).strip()
@@ -388,9 +424,8 @@ def strip_suffixes_and_parse_name(full_name: str, gen_suffixes: Set[str], prof_s
             trailing.append(tokens.pop())
         if trailing:
             professional.extend(reversed(trailing))
-        if len(tokens) == 1 and normalize_prof_token(tokens[0]) in gen_suffixes:
-            gen_suffix = tokens[0]
-            tokens = []
+        while tokens and normalize_prof_token(tokens[-1]) in gen_suffixes:
+            gen_suffix = tokens.pop()
         if tokens:
             kept_parts.append(" ".join(tokens))
 
@@ -410,11 +445,15 @@ def strip_suffixes_and_parse_name(full_name: str, gen_suffixes: Set[str], prof_s
     return first, middle, last, gen_suffix, professional, maiden, full_name_clean
 
 
-def normalize_email_collection(values: Sequence[Email], check_deliverability: bool = False) -> List[Email]:
+def normalize_email_collection(
+    values: Sequence[Email], check_deliverability: bool = False
+) -> List[Email]:
     out: List[Email] = []
     seen: Set[str] = set()
     for entry in values:
-        normalized_value = validate_email_safe(entry.value, check_deliverability=check_deliverability)
+        normalized_value = validate_email_safe(
+            entry.value, check_deliverability=check_deliverability
+        )
         if not normalized_value:
             continue
         if normalized_value in seen:
@@ -448,7 +487,9 @@ def normalize_address(address: Address) -> Address:
 
     if street and (not city or not state or not postal_code):
         city_guess, state_guess, postal_guess = "", "", ""
-        match = re.search(r"(.*?)[,\s]+([^,]+?)[,\s]+([A-Za-z]{2})[,\s]+(\d{4,10})(?:[-\s]\d+)?$", street)
+        match = re.search(
+            r"(.*?)[,\s]+([^,]+?)[,\s]+([A-Za-z]{2})[,\s]+(\d{4,10})(?:[-\s]\d+)?$", street
+        )
         if match:
             street = match.group(1).strip()
             city_guess = match.group(2).strip()
@@ -586,33 +627,47 @@ def choose_best_first_name(records: Sequence[ContactRecord]) -> Tuple[str, str]:
     return casing.get(best_key, best_key.title()), best_key
 
 
-def normalize_contact_record(record: ContactRecord, settings: NormalizationSettings) -> ContactRecord:
+def normalize_contact_record(
+    record: ContactRecord, settings: NormalizationSettings
+) -> ContactRecord:
     gen_suffixes = settings.keep_generational_suffixes or set()
     prof_suffixes = settings.professional_suffixes or set()
 
     tmp_emails: List[Email] = []
-    raw_name = strip_emails_from_text_and_capture(record.full_name_raw or record.full_name, tmp_emails)
-    first, middle, last, gen_suffix, prof, maiden, full_name_clean = strip_suffixes_and_parse_name(raw_name, gen_suffixes, prof_suffixes)
+    raw_name = strip_emails_from_text_and_capture(
+        record.full_name_raw or record.full_name, tmp_emails
+    )
+    first, middle, last, gen_suffix, prof, maiden, full_name_clean = strip_suffixes_and_parse_name(
+        raw_name, gen_suffixes, prof_suffixes
+    )
 
     if tmp_emails:
         existing_values = {email.value for email in record.emails}
-        record.emails.extend([email for email in tmp_emails if email.value and email.value not in existing_values])
+        record.emails.extend(
+            [email for email in tmp_emails if email.value and email.value not in existing_values]
+        )
 
     if not (first or last):
-        primary_email = next((email.value for email in record.emails if EMAIL_RE.match(email.value)), "")
+        primary_email = next(
+            (email.value for email in record.emails if EMAIL_RE.match(email.value)), ""
+        )
         if primary_email:
             local = primary_email.split("@", 1)[0]
             f_guess, l_guess = guess_name_from_email_local(local)
             first = first or f_guess
             last = last or l_guess
-            full_name_clean = " ".join(part for part in [first, middle, last, gen_suffix] if part).strip()
+            full_name_clean = " ".join(
+                part for part in [first, middle, last, gen_suffix] if part
+            ).strip()
 
     record.first_name = first or record.first_name
     record.middle_name = middle or record.middle_name
     record.last_name = last or record.last_name
     record.maiden_name = maiden or record.maiden_name
     record.suffix = record.suffix or gen_suffix
-    record.suffix_professional = record.suffix_professional or "|".join(prof) if prof else record.suffix_professional
+    record.suffix_professional = (
+        record.suffix_professional or "|".join(prof) if prof else record.suffix_professional
+    )
     record.full_name = full_name_clean or record.full_name
 
     cleaned_emails: List[Email] = []
@@ -628,7 +683,9 @@ def normalize_contact_record(record: ContactRecord, settings: NormalizationSetti
             setattr(record, field_name, "")
 
     if not (record.first_name or record.last_name):
-        primary_email = next((email.value for email in record.emails if EMAIL_RE.match(email.value)), "")
+        primary_email = next(
+            (email.value for email in record.emails if EMAIL_RE.match(email.value)), ""
+        )
         if primary_email:
             local = primary_email.split("@", 1)[0]
             f_guess, l_guess = guess_name_from_email_local(local)
@@ -637,14 +694,20 @@ def normalize_contact_record(record: ContactRecord, settings: NormalizationSetti
             if not record.first_name and f_guess:
                 record.first_name = f_guess
     if record.last_name:
-        primary_email = next((email.value for email in record.emails if EMAIL_RE.match(email.value)), "")
+        primary_email = next(
+            (email.value for email in record.emails if EMAIL_RE.match(email.value)), ""
+        )
         if primary_email and not record.first_name:
             local = primary_email.split("@", 1)[0]
             initial = reconcile_name_from_email_and_last(local, record.last_name)
             if initial:
                 record.first_name = initial
 
-    record.full_name = " ".join(part for part in [record.first_name, record.middle_name, record.last_name, record.suffix] if part).strip()
+    record.full_name = " ".join(
+        part
+        for part in [record.first_name, record.middle_name, record.last_name, record.suffix]
+        if part
+    ).strip()
 
     record.emails = normalize_email_collection(record.emails)
     record.phones = normalize_phone_collection(record.phones, settings.default_phone_country)

@@ -9,6 +9,7 @@ from .models import Address, ContactRecord, Email, LineageEntry, Phone
 from .normalization import (
     NormalizationSettings,
     address_keys_for_match,
+    choose_best_first_name,
     format_phone_e164_safe,
     guess_name_from_email_local,
     is_valid_phone_safe,
@@ -29,7 +30,6 @@ from .normalization import (
     uniq_list_of_dicts,
     validate_email_safe,
     warn_missing,
-    choose_best_first_name,
 )
 
 __all__ = [
