@@ -242,8 +242,10 @@ def load_vcards(path: Optional[str]) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8", errors="ignore") as fh:
         content = fh.read()
     rows: List[Dict[str, Any]] = []
+    row_idx = 0
     for block in re.split(r"END:VCARD", content):
-        if "BEGIN:VCARD" not in block: continue
+        if "BEGIN:VCARD" not in block:
+            continue
         b = block + "END:VCARD"
         d: Dict[str, Any] = {
             "full_name_raw": "", "full_name": "",
@@ -251,7 +253,7 @@ def load_vcards(path: Optional[str]) -> List[Dict[str, Any]]:
             "maiden_name": "", "suffix": "", "suffix_professional": "",
             "emails": [], "phones": [], "addresses": [],
             "company": "", "title": "", "linkedin_url": "",
-            "source": "mac_vcf", "source_row_id": None
+            "source": "mac_vcf", "source_row_id": str(row_idx)
         }
         m = re.search(r"^FN:(.+)$", b, flags=re.MULTILINE)
         if m: d["full_name_raw"] = m.group(1).strip()
@@ -297,6 +299,7 @@ def load_vcards(path: Optional[str]) -> List[Dict[str, Any]]:
         for u in re.findall(r"^URL:(.+)$", b, flags=re.MULTILINE):
             if "linkedin.com" in u.lower(): d["linkedin_url"] = u.strip(); break
         rows.append(d)
+        row_idx += 1
     return rows
 
 
@@ -728,6 +731,13 @@ def main() -> int:
     parser.add_argument("--require-corroborator", action="store_true")
     parser.add_argument("--keep-generational-suffixes", nargs="*", default=None)
     parser.add_argument("--professional-suffixes", nargs="*", default=None)
+    parser.add_argument(
+        "--nickname-equivalence",
+        dest="enable_nickname_equivalence",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable nickname equivalence when matching first names (default: on).",
+    )
     args = parser.parse_args()
 
     cfg: Dict[str, Any] = {}
@@ -754,6 +764,11 @@ def main() -> int:
     args.merge_score_threshold = args.merge_score_threshold or dedupe.get("merge_score_threshold", 1.2)
     args.relaxed_merge_threshold = args.relaxed_merge_threshold or dedupe.get("relaxed_merge_threshold", 0.6)
     args.require_corroborator = args.require_corroborator or dedupe.get("require_corroborator", False)
+    if args.enable_nickname_equivalence is None:
+        if "enable_nickname_equivalence" in dedupe:
+            args.enable_nickname_equivalence = bool(dedupe["enable_nickname_equivalence"])
+        else:
+            args.enable_nickname_equivalence = True
 
     contacts_df, lineage_df = build(args)
 
