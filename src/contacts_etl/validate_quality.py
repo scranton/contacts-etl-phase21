@@ -2,9 +2,10 @@ import argparse
 import csv
 import json
 import os
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
+import yaml  # type: ignore[import-untyped]
 
 from .common import is_valid_phone_safe, validate_email_safe
 
@@ -13,8 +14,10 @@ def pct(n, d):
     return round((n / d * 100.0), 2) if d else 0.0
 
 
-def validate_email_list(emails_field: object, dns_mx: object = False) -> Tuple[int, int, List[str]]:
-    details: List[str] = []
+def validate_email_list(
+    emails_field: object, dns_mx: bool = False
+) -> Tuple[int, int, List[Dict[str, Any]]]:
+    details: List[Dict[str, Any]] = []
     if not isinstance(emails_field, str) or not emails_field.strip():
         return 0, 0, details
     parts = [p for p in emails_field.split("|") if p.strip()]
@@ -54,8 +57,8 @@ def validate_phone_list(phones_field: str) -> Tuple[int, int, List[str]]:
     return len(valid_values), total, valid_values
 
 
-def parse_addresses_json(addresses_json):
-    details = []
+def parse_addresses_json(addresses_json: object) -> Tuple[int, int, List[Dict[str, Any]]]:
+    details: List[Dict[str, Any]] = []
     if not isinstance(addresses_json, str) or not addresses_json.strip():
         return 0, 0, details
     try:
@@ -85,8 +88,6 @@ def parse_addresses_json(addresses_json):
 
 
 def main():
-    import yaml
-
     parser = argparse.ArgumentParser(description="Validate & score consolidated contacts.")
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--contacts-csv", type=str, default=None)
@@ -98,12 +99,12 @@ def main():
     )
 
     args = parser.parse_args()
-    cfg = {}
+    cfg: Dict[str, Any] = {}
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
-    validation_cfg = cfg.get("validation", {})
-    outputs = cfg.get("outputs", {})
+    validation_cfg: Dict[str, Any] = cfg.get("validation", {}) or {}
+    outputs: Dict[str, Any] = cfg.get("outputs", {}) or {}
 
     contacts_csv = args.contacts_csv or os.path.join(
         outputs.get("dir", os.getcwd()), "consolidated_contacts.csv"
@@ -113,7 +114,7 @@ def main():
 
     df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
 
-    records = []
+    records: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
         e_valid, e_total, e_details = validate_email_list(row.get("emails", ""), dns_mx=dns_mx)
         p_valid, p_total, p_details = validate_phone_list(row.get("phones", ""))

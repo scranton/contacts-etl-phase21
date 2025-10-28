@@ -170,15 +170,16 @@ def main():
 
     # Summary
     total = len(contacts_df)
-    summary = {
+    bucket_counts: Dict[str, int] = contacts_df["confidence_bucket"].value_counts().to_dict()
+    bucket_pct: Dict[str, float] = (
+        contacts_df["confidence_bucket"].value_counts(normalize=True).mul(100).round(2).to_dict()
+    )
+
+    summary: Dict[str, object] = {
         "total_contacts": total,
         "avg_confidence": round(sum(scores) / total, 2) if total else 0.0,
-        "bucket_counts": contacts_df["confidence_bucket"].value_counts().to_dict(),
-        "bucket_pct": contacts_df["confidence_bucket"]
-        .value_counts(normalize=True)
-        .mul(100)
-        .round(2)
-        .to_dict(),
+        "bucket_counts": bucket_counts,
+        "bucket_pct": bucket_pct,
     }
     # Save summary CSV
     rows = []
@@ -186,8 +187,8 @@ def main():
         rows.append(
             {
                 "bucket": b,
-                "count": summary["bucket_counts"].get(b, 0),
-                "pct": summary["bucket_pct"].get(b, 0.0),
+                "count": bucket_counts.get(b, 0),
+                "pct": bucket_pct.get(b, 0.0),
             }
         )
     out_summary = os.path.join(out_dir, "confidence_summary.csv")

@@ -21,14 +21,12 @@ Description-Content-Type: text/markdown
 Requires-Dist: pandas<2.4,>=2.2
 Requires-Dist: python-dateutil>=2.8.2
 Requires-Dist: pyyaml>=6.0.1
-Provides-Extra: validation
-Requires-Dist: email-validator>=2.1.0; extra == "validation"
-Requires-Dist: phonenumberslite>=8.13.0; extra == "validation"
-Requires-Dist: usaddress>=0.5.10; extra == "validation"
-Requires-Dist: dnspython>=2.3.0; extra == "validation"
-Provides-Extra: dedupe
-Requires-Dist: recordlinkage>=0.16; extra == "dedupe"
-Requires-Dist: numpy>=1.26; extra == "dedupe"
+Requires-Dist: email-validator>=2.1.0
+Requires-Dist: phonenumberslite>=8.13.0
+Requires-Dist: usaddress>=0.5.10
+Requires-Dist: dnspython>=2.3.0
+Requires-Dist: recordlinkage>=0.16
+Requires-Dist: numpy>=1.26
 Provides-Extra: tests
 Requires-Dist: pytest<9,>=7.0; extra == "tests"
 Provides-Extra: dev
@@ -50,13 +48,11 @@ Merge contacts exported from macOS Contacts (vCard), Gmail, and LinkedIn into a 
 
 ## Requirements
 
-- Python **3.10 – 3.12**
+- Python **3.12+** (project targets 3.12.4)
 - `pip` (or `uv`, `pipx`, etc.) for dependency management
-- Optional extras:
-  - `validation` extra enables email/phone validation (`email-validator`, `phonenumberslite`, `dnspython`, `usaddress`)
-  - `dedupe` extra enables advanced record linkage (`recordlinkage`, `numpy`)
-  - `tests` extra installs just `pytest` for lightweight CI runs
-  - `dev` extra installs the full testing/tooling stack (`pytest`, `pytest-cov`, `mypy`, `flake8`, `black`, `isort`)
+- All pipeline dependencies install with the base package; extras only add tooling:
+  - `tests` adds just `pytest`
+  - `dev` installs the full testing/tooling stack (`pytest`, `pytest-cov`, `mypy`, `flake8`, `black`, `isort`)
 
 Data files are expected under the repository by default:
 
@@ -110,10 +106,10 @@ contacts-etl-phase21/
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
-   pip install -e '.[validation,dedupe,dev]'
+   pip install -e '.[dev]'
    ```
 
-   *(omit extras you do not need)*.
+   *(use `pip install -e .` for the lean runtime; add `[tests]` if you only need pytest)*.
 
 3. Verify the CLI entry points are on your PATH: `contacts-consolidate --help`.
 
@@ -124,7 +120,7 @@ contacts-etl-phase21/
 ### JetBrains DataSpell
 
 1. **Open** the project root in DataSpell.
-2. Create a new interpreter (`.venv`, Conda, or Pyenv) and install with `pip install -e '.[validation,dedupe,dev]'`.
+2. Create a new interpreter (`.venv`, Conda, or Pyenv) and install with `pip install -e '.[dev]'`.
 3. Use the built-in **Run/Debug Configurations**:
    - Create a new *Python* configuration per command (`contacts-consolidate`, `contacts-validate`, etc.).
    - Set the working directory to the project root and pass `--config config.yaml`.
@@ -150,7 +146,7 @@ contacts-etl-phase21/
 - `scripts/confidence_insights.ipynb` — highlights the top 25 contacts from `confidence_report.csv` in the `very_high` and `high` buckets, including source counts and available contact channels.
 - `scripts/referral_insights.ipynb` — surfaces the highest `referral_priority_score` entries from `referral_targets.csv` (or `tagged_contacts.csv` as a fallback) so you can line up warm introductions quickly.
 
-Open either notebook in VS Code Jupyter (Python 3.10+ kernel) after regenerating the pipeline outputs to explore the latest results.
+Open either notebook in VS Code Jupyter (Python 3.12+ kernel) after regenerating the pipeline outputs to explore the latest results.
 
 ---
 

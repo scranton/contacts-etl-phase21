@@ -68,6 +68,8 @@ def _build_normalization_settings(config: PipelineConfig) -> NormalizationSettin
 
 
 def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
+    if not path:
+        return []
     if warn_missing(path, "LinkedIn"):
         return []
     df = read_csv_with_optional_header(path, header_starts_with="First Name,Last Name,URL")
@@ -76,8 +78,8 @@ def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
         linkedin_url = safe_get(row, "URL")
         if "linkedin.com" not in linkedin_url.lower():
             linkedin_url = ""
-        email_value = safe_get(row, "Email Address")
-        emails = [Email(value=email_value, label="work")] if email_value else []
+        primary_email = safe_get(row, "Email Address")
+        emails = [Email(value=primary_email, label="work")] if primary_email else []
         full_name_raw = " ".join([safe_get(row, "First Name"), safe_get(row, "Last Name")]).strip()
         record = ContactRecord(
             full_name_raw=full_name_raw,
@@ -93,6 +95,8 @@ def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
 
 
 def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
+    if not path:
+        return []
     if warn_missing(path, "GMail"):
         return []
     df = read_csv_with_optional_header(path)
@@ -100,21 +104,21 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
     for idx, row in df.iterrows():
         emails: List[Email] = []
         for n in range(1, 5):
-            address = safe_get(row, f"E-mail {n} - Value")
-            if not address:
+            email_value = safe_get(row, f"E-mail {n} - Value")
+            if not email_value:
                 continue
-            label = safe_get(row, f"E-mail {n} - Type").lower()
-            emails.append(Email(value=address, label=label))
+            email_label = safe_get(row, f"E-mail {n} - Type").lower()
+            emails.append(Email(value=email_value, label=email_label))
         phones: List[Phone] = []
         for n in range(1, 5):
-            number = safe_get(row, f"Phone {n} - Value")
-            if not number:
+            phone_value = safe_get(row, f"Phone {n} - Value")
+            if not phone_value:
                 continue
-            label = safe_get(row, f"Phone {n} - Label").lower()
-            phones.append(Phone(value=number, label=label))
+            phone_label = safe_get(row, f"Phone {n} - Label").lower()
+            phones.append(Phone(value=phone_value, label=phone_label))
         addresses: List[Address] = []
         for n in range(1, 4):
-            address = Address(
+            address_entry = Address(
                 po_box=safe_get(row, f"Address {n} - PO Box"),
                 extended="",  # or pull a real field if one exists in the CSV
                 street=safe_get(row, f"Address {n} - Street")
@@ -126,10 +130,10 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
                 label=safe_get(row, f"Address {n} - Label"),
             )
             if any(
-                getattr(address, field)
+                getattr(address_entry, field)
                 for field in ("street", "city", "state", "postal_code", "country", "po_box")
             ):
-                addresses.append(address)
+                addresses.append(address_entry)
         raw_full = " ".join(
             [safe_get(row, "First Name"), safe_get(row, "Middle Name"), safe_get(row, "Last Name")]
         ).strip()
@@ -150,6 +154,8 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
 
 
 def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
+    if not path:
+        return []
     if warn_missing(path, "Mac VCF"):
         return []
     with open(path, "r", encoding="utf-8", errors="ignore") as handle:
@@ -187,15 +193,15 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                 value = line.split(":", 1)[1].strip()
                 record.phones.append(Phone(value=value, label=""))
             elif line.startswith("ADR"):
-                value = line.split(":", 1)[1].split(";")
+                parts = line.split(":", 1)[1].split(";")
                 address = Address(
-                    po_box=value[0].strip() if len(value) > 0 else "",
-                    extended=value[1].strip() if len(value) > 1 else "",
-                    street=value[2].strip() if len(value) > 2 else "",
-                    city=value[3].strip() if len(value) > 3 else "",
-                    state=value[4].strip() if len(value) > 4 else "",
-                    postal_code=value[5].strip() if len(value) > 5 else "",
-                    country=value[6].strip() if len(value) > 6 else "",
+                    po_box=parts[0].strip() if len(parts) > 0 else "",
+                    extended=parts[1].strip() if len(parts) > 1 else "",
+                    street=parts[2].strip() if len(parts) > 2 else "",
+                    city=parts[3].strip() if len(parts) > 3 else "",
+                    state=parts[4].strip() if len(parts) > 4 else "",
+                    postal_code=parts[5].strip() if len(parts) > 5 else "",
+                    country=parts[6].strip() if len(parts) > 6 else "",
                 )
                 record.addresses.append(address)
             elif line.startswith("ORG:"):

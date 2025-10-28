@@ -16,7 +16,7 @@ $(PYTHON_BIN):
 venv: $(PYTHON_BIN) ## Create the virtualenv (if missing) and upgrade pip
 
 install: venv ## Install project with development extras
-	$(PIP) install -e ".[validation,dedupe,dev]"
+	$(PIP) install -e ".[dev]"
 
 lint: install ## Run static lint checks
 	$(VENV_BIN)/flake8 src tests

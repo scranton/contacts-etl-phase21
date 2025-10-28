@@ -4,7 +4,7 @@ import argparse
 import csv
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -31,6 +31,8 @@ DEFAULT_LOCAL_CITIES = [
 
 def _load_gmail_notes(path: Optional[str]) -> Dict[str, str]:
     notes: Dict[str, str] = {}
+    if not path:
+        return notes
     if warn_missing(path, "GMail"):
         return notes
     df = read_csv_with_optional_header(path)
@@ -44,6 +46,8 @@ def _load_gmail_notes(path: Optional[str]) -> Dict[str, str]:
 
 
 def _load_vcf_notes(path: Optional[str]) -> Dict[str, str]:
+    if not path:
+        return {}
     if warn_missing(path, "Mac VCF"):
         return {}
     with open(path, "r", encoding="utf-8", errors="ignore") as handle:
@@ -88,7 +92,7 @@ def _build_notes_map(
         logger.warning("Unable to build notes map from lineage: %s", exc)
         return notes
     for contact_id, chunk in lineage_df.groupby("contact_id"):
-        snippets = []
+        snippets: List[str] = []
         for _, row in chunk.iterrows():
             source = safe_get(row, "source")
             row_id = safe_get(row, "source_row_id")
@@ -97,7 +101,7 @@ def _build_notes_map(
             elif source == "mac_vcf" and row_id in vcf_notes:
                 snippets.append(vcf_notes[row_id])
         if snippets:
-            notes[contact_id] = " | ".join(snippets)
+            notes[str(contact_id)] = " | ".join(snippets)
     return notes
 
 
@@ -127,15 +131,21 @@ def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None):
     tag_values = []
     primary_values = []
     notes_values = []
+    sanitized_rows: List[Dict[str, str]] = []
     for _, row in df.iterrows():
-        contact_id = safe_get(row, "contact_id")
-        row_data = dict(row)
+        sanitized = {col: safe_get(row, col) for col in df.columns}
+        contact_id = sanitized.get("contact_id", "")
         if contact_id in notes_map:
-            row_data["notes_blob"] = notes_map[contact_id]
-        tags, primary = tag_engine.tag_record(row_data)
-        tag_values.append("|".join(sorted(tags)) if tags else "")
+            sanitized["notes_blob"] = notes_map[contact_id]
+        else:
+            sanitized.setdefault("notes_blob", "")
+        tags, primary = tag_engine.tag_record(sanitized)
+        tag_str = "|".join(sorted(tags)) if tags else ""
+        tag_values.append(tag_str)
         primary_values.append(primary)
-        notes_values.append(notes_map.get(contact_id, ""))
+        notes_values.append(sanitized.get("notes_blob", ""))
+        sanitized["tags"] = tag_str
+        sanitized_rows.append(sanitized)
 
     df["tags"] = tag_values
     df["relationship_category"] = primary_values
@@ -143,9 +153,13 @@ def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None):
         df["confidence_score"] = 0
     df["notes_blob"] = notes_values
 
+    confidence_as_str = df["confidence_score"].astype(str).tolist()
+    for sanitized_record, confidence in zip(sanitized_rows, confidence_as_str):
+        sanitized_record["confidence_score"] = confidence
+
     try:
         df["referral_priority_score"] = [
-            TagEngine.compute_referral_priority(record) for record in df.to_dict(orient="records")
+            TagEngine.compute_referral_priority(record) for record in sanitized_rows
         ]
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("Unable to calculate referral_priority_score: %s", exc)
