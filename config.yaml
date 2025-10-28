@@ -2,13 +2,13 @@
 
 # Input sources (any can be omitted if not available)
 inputs:
-  linkedin_csv: "/Users/scranton/DataspellProjects/contacts-etl-phase21/data/linkedin.csv"
-  gmail_csv: "/Users/scranton/DataspellProjects/contacts-etl-phase21/data/gmail.csv"
-  mac_vcf: "/Users/scranton/DataspellProjects/contacts-etl-phase21/data/mac.vcf"
+  linkedin_csv: "./data/linkedin.csv"
+  gmail_csv: "./data/gmail.csv"
+  mac_vcf: "./data/mac.vcf"
 
 # Output folder
 outputs:
-  dir: "/Users/scranton/DataspellProjects/contacts-etl-phase21/output"
+  dir: "./output"
 
 # Normalization options
 normalization:
