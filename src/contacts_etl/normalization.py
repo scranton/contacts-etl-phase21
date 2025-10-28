@@ -358,8 +358,9 @@ def strip_suffixes_and_parse_name(full_name: str, gen_suffixes: Set[str], prof_s
     name = str(full_name).strip()
     maiden = ""
     paren = re.search(r"\(([^)]+)\)", name)
+    paren_text = ""
     if paren:
-        maiden = paren.group(1).strip()
+        paren_text = paren.group(1).strip()
         name = (name[: paren.start()] + name[paren.end() :]).strip()
     parts = [p.strip() for p in re.split(r"[,\u2013\u2014-]+", name) if p.strip()]
     kept_parts: List[str] = []
@@ -392,6 +393,17 @@ def strip_suffixes_and_parse_name(full_name: str, gen_suffixes: Set[str], prof_s
             tokens = []
         if tokens:
             kept_parts.append(" ".join(tokens))
+
+    if paren_text:
+        maiden_tokens: List[str] = []
+        for token in [t.strip() for t in re.split(r"[,/&;]+", paren_text) if t.strip()]:
+            if is_prof_token(token):
+                professional.append(token)
+            else:
+                maiden_tokens.append(token)
+        if maiden_tokens:
+            maiden = " ".join(maiden_tokens)
+
     base = " ".join(kept_parts).strip()
     first, middle, last = parse_name_multi_last(base)
     full_name_clean = " ".join([part for part in (first, middle, last, gen_suffix) if part]).strip()
