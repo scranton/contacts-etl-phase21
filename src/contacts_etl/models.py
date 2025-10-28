@@ -175,6 +175,10 @@ class LineageEntry:
     source_emails: str
     source_phones: str
     source_addresses_json: str
+    source_emails_raw: str = ""
+    source_phones_raw: str = ""
+    invalid_emails: str = ""
+    non_standard_phones: str = ""
 
     def to_dict(self) -> Dict[str, str]:
         return {
@@ -187,4 +191,8 @@ class LineageEntry:
             "source_emails": self.source_emails,
             "source_phones": self.source_phones,
             "source_addresses_json": self.source_addresses_json,
+            "source_emails_raw": self.source_emails_raw,
+            "source_phones_raw": self.source_phones_raw,
+            "invalid_emails": self.invalid_emails,
+            "non_standard_phones": self.non_standard_phones,
         }

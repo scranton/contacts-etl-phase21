@@ -489,34 +489,34 @@ def normalize_phone_collection(
     out: List[Phone] = []
     seen: Set[str] = set()
     non_standard: List[str] = []
+    non_standard_seen: Set[str] = set()
     for entry in values:
         raw_value = entry.value or ""
         formatted = format_phone_e164_safe(raw_value, default_country=default_country)
-        candidate = ""
-        is_confident = False
+        is_confident = bool(formatted and is_valid_phone_safe(formatted))
 
-        if formatted and is_valid_phone_safe(formatted):
-            candidate = formatted
-            is_confident = True
-        else:
+        if not is_confident:
             compact = re.sub(r"\s+", "", raw_value)
             if compact and compact != raw_value:
-                formatted = format_phone_e164_safe(compact, default_country=default_country)
-                if formatted and is_valid_phone_safe(formatted):
-                    candidate = formatted
+                formatted_compact = format_phone_e164_safe(compact, default_country=default_country)
+                if formatted_compact and is_valid_phone_safe(formatted_compact):
+                    formatted = formatted_compact
                     is_confident = True
-        if not candidate:
-            candidate = raw_value.strip()
-        if not candidate:
-            continue
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        out.append(Phone(value=candidate, label=entry.label))
-        if not is_confident:
-            trimmed_raw = raw_value.strip()
-            if trimmed_raw:
-                non_standard.append(trimmed_raw)
+
+        if is_confident and formatted:
+            if formatted in seen:
+                continue
+            seen.add(formatted)
+            out.append(Phone(value=formatted, label=entry.label))
+        else:
+            trimmed = raw_value.strip()
+            if not trimmed:
+                continue
+            rendered = f"{trimmed}::{entry.label}" if entry.label else trimmed
+            if rendered in non_standard_seen:
+                continue
+            non_standard_seen.add(rendered)
+            non_standard.append(rendered)
     return out, non_standard
 
 
@@ -767,6 +767,13 @@ def normalize_contact_record(
     record.emails, invalid_emails = normalize_email_collection(record.emails)
     if invalid_emails:
         record.extra.setdefault("invalid_emails", []).extend(invalid_emails)
+        logger.info(
+            "Dropped %d invalid email(s) for %s:%s -> %s",
+            len(invalid_emails),
+            record.source or "unknown",
+            record.source_row_id or "unknown",
+            ", ".join(invalid_emails[:5]),
+        )
 
     normalized_phones, non_standard_phones = normalize_phone_collection(
         record.phones, settings.default_phone_country
@@ -774,6 +781,13 @@ def normalize_contact_record(
     record.phones = normalized_phones
     if non_standard_phones:
         record.extra.setdefault("non_standard_phones", []).extend(non_standard_phones)
+        logger.info(
+            "Flagged %d non-standard phone(s) for %s:%s -> %s",
+            len(non_standard_phones),
+            record.source or "unknown",
+            record.source_row_id or "unknown",
+            ", ".join(non_standard_phones[:5]),
+        )
 
     record.addresses = normalize_address_collection(record.addresses)
 

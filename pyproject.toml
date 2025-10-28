@@ -53,7 +53,8 @@ dev = [
     "flake8>=7.1.0,<8",
     "flake8-pyproject>=1.2.3",
     "black>=24.0", # optional formatting tool
-    "isort>=5"            # optional import sorter
+    "isort>=5",            # optional import sorter
+    "ipykernel>=6.29"
 ]
 
 [project.scripts]

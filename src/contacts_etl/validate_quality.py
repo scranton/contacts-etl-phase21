@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import logging
 import os
 from typing import Any, Dict, List, Tuple
 
@@ -8,6 +9,8 @@ import pandas as pd
 import yaml  # type: ignore[import-untyped]
 
 from .common import is_valid_phone_safe, validate_email_safe
+
+logger = logging.getLogger(__name__)
 
 
 def pct(n, d):
@@ -64,6 +67,7 @@ def parse_addresses_json(addresses_json: object) -> Tuple[int, int, List[Dict[st
     try:
         addrs = json.loads(addresses_json)
     except (ValueError, json.JSONDecodeError, TypeError):
+        logger.info("Skipping malformed address payload: %s", addresses_json[:120])
         return 0, 0, details
     valid_count = 0
     for a in addrs:

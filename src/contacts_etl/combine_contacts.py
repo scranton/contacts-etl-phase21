@@ -116,6 +116,23 @@ def _extract_phone_values(raw: str) -> List[str]:
     return [candidate for candidate in candidates if candidate]
 
 
+def _extract_email_values(raw: str) -> List[str]:
+    if not raw:
+        return []
+    candidates: List[str] = []
+    for part in re.split(r"[\r\n|;]+", raw):
+        part = part.strip()
+        if not part:
+            continue
+        # Emails sometimes embedded in text like "foo@bar ::: baz@qux"
+        subparts = [segment.strip() for segment in re.split(r":::+", part) if segment.strip()]
+        if len(subparts) > 1:
+            candidates.extend(subparts)
+        else:
+            candidates.append(part)
+    return [candidate for candidate in candidates if candidate]
+
+
 def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
     if not path:
         return []
@@ -128,12 +145,13 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
         for column in row.index:
             if not str(column).startswith("E-mail ") or not str(column).endswith(" - Value"):
                 continue
-            email_value = safe_get(row, column)
-            if not email_value:
+            email_value_raw = safe_get(row, column)
+            if not email_value_raw:
                 continue
             label_col = str(column).replace(" - Value", " - Type")
             email_label = safe_get(row, label_col).lower()
-            emails.append(Email(value=email_value, label=email_label))
+            for extracted in _extract_email_values(email_value_raw):
+                emails.append(Email(value=extracted, label=email_label))
 
         phones: List[Phone] = []
         for column in row.index:
@@ -379,9 +397,12 @@ def _normalize_phone_value(value: str, default_country: str) -> Tuple[str, bool]
 
 
 def _merge_cluster(
-    indices: List[int], records: List[ContactRecord], default_country: str
+    indices: List[int],
+    normalized_records: List[ContactRecord],
+    raw_records: List[ContactRecord],
+    default_country: str,
 ) -> Tuple[ContactRecord, List[LineageEntry]]:
-    cluster_records = [records[idx] for idx in indices]
+    cluster_records = [normalized_records[idx] for idx in indices]
     best_first, _ = choose_best_first_name(cluster_records)
 
     template = cluster_records[0]
@@ -398,14 +419,23 @@ def _merge_cluster(
 
     all_emails: Dict[str, str] = {}
     all_phones: Dict[str, str] = {}
+    cluster_invalid_emails: Set[str] = set()
+    cluster_non_standard_phones: Set[str] = set()
     all_addresses: List[Dict[str, str]] = []
     seen_addr_keys: set[str] = set()
-    for record in cluster_records:
+    for idx, record in zip(indices, cluster_records):
+        record_extra = record.extra or {}
+        cluster_invalid_emails.update(record_extra.get("invalid_emails", []))
+        cluster_non_standard_phones.update(record_extra.get("non_standard_phones", []))
         for email in record.emails:
             all_emails[email.value] = email.label
         for phone in record.phones:
             normalized_value, is_confident = _normalize_phone_value(phone.value, default_country)
             if not normalized_value:
+                continue
+            if not is_confident:
+                rendered = f"{normalized_value}::{phone.label}" if phone.label else normalized_value
+                cluster_non_standard_phones.add(rendered)
                 continue
             existing_label = all_phones.get(normalized_value)
             if existing_label:
@@ -414,10 +444,6 @@ def _merge_cluster(
                     all_phones[normalized_value] = phone.label
             else:
                 all_phones[normalized_value] = phone.label
-            if not is_confident:
-                trimmed = phone.value.strip()
-                if trimmed and trimmed not in all_phones:
-                    all_phones[trimmed] = phone.label
         for address in record.addresses:
             as_dict = address.to_dict()
             key = json.dumps(as_dict, sort_keys=True)
@@ -464,8 +490,11 @@ def _merge_cluster(
     )
     merged.addresses = [Address.from_mapping(address) for address in all_addresses]
 
-    lineage_entries = []
-    for idx, record in zip(indices, cluster_records):
+    lineage_entries: List[LineageEntry] = []
+    for idx in indices:
+        record = normalized_records[idx]
+        raw_record = raw_records[idx]
+        record_extra = record.extra or {}
         lineage_entries.append(
             LineageEntry(
                 contact_id=contact_id,
@@ -479,6 +508,10 @@ def _merge_cluster(
                 source_addresses_json=json.dumps(
                     [address.to_dict() for address in record.addresses], ensure_ascii=False
                 ),
+                source_emails_raw="|".join(email.value for email in raw_record.emails),
+                source_phones_raw="|".join(phone.value for phone in raw_record.phones),
+                invalid_emails="|".join(record_extra.get("invalid_emails", [])),
+                non_standard_phones="|".join(record_extra.get("non_standard_phones", [])),
             )
         )
 
@@ -486,6 +519,22 @@ def _merge_cluster(
     merged.extra["addresses_json"] = deduped_addresses_json
     merged.extra["source_count"] = len(unique_sources) or len(cluster_records)
     merged.extra["source_row_count"] = len(cluster_records)
+    if cluster_invalid_emails:
+        merged.extra["invalid_emails"] = sorted(cluster_invalid_emails)
+        logger.info(
+            "Contact %s dropped %d invalid email(s): %s",
+            contact_id,
+            len(cluster_invalid_emails),
+            ", ".join(list(cluster_invalid_emails)[:5]),
+        )
+    if cluster_non_standard_phones:
+        merged.extra["non_standard_phones"] = sorted(cluster_non_standard_phones)
+        logger.info(
+            "Contact %s flagged %d non-standard phone(s): %s",
+            contact_id,
+            len(cluster_non_standard_phones),
+            ", ".join(list(cluster_non_standard_phones)[:5]),
+        )
 
     return merged, lineage_entries
 
@@ -506,7 +555,10 @@ def build(
     lineage_records: List[LineageEntry] = []
     for indices in clusters.values():
         merged, lineage = _merge_cluster(
-            indices, normalized_records, normalization_settings.default_phone_country
+            indices,
+            normalized_records,
+            raw_records,
+            normalization_settings.default_phone_country,
         )
         merged_contacts.append(merged)
         lineage_records.extend(lineage)
@@ -530,6 +582,8 @@ def build(
                 "emails": "|".join(f"{email.value}::{email.label}" for email in record.emails),
                 "phones": "|".join(f"{phone.value}::{phone.label}" for phone in record.phones),
                 "addresses_json": extra.get("addresses_json", "[]"),
+                "invalid_emails": "|".join(sorted(set(extra.get("invalid_emails", [])))),
+                "non_standard_phones": "|".join(sorted(set(extra.get("non_standard_phones", [])))),
                 "source_count": extra.get("source_count", 1),
                 "source_row_count": extra.get("source_row_count", extra.get("source_count", 1)),
             }
