@@ -1,0 +1,4 @@
+{
+    "flake8.importStrategy": "fromEnvironment",
+    "python.linting.flake8Args": ["--config", "${workspaceFolder}/pyproject.toml"]
+}

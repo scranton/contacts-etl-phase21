@@ -1,228 +1,145 @@
+from __future__ import annotations
+
 import argparse
 import csv
 import json
+import logging
 import os
-import re
-from typing import Any, Dict, Set
-from .common import (
-    _norm,
-    read_csv_with_optional_header,
-    _sget,
-    _warn_missing,
-)
+from typing import Dict, Optional
 
 import pandas as pd
-import logging
 
-MARTIAL_KWS = [r"tai\s*chi", r"wu\s*an", r"wu\s*dao", r"kung\s*fu", r"shaolin", r"martial\s*arts"]
-NUTCRACKER_KWS = [r"nutcracker", r"\bcherub(s)?\b", r"jose\s*mateo", r"ballet"]
+from .common import load_config, read_csv_with_optional_header, safe_get, warn_missing
+from .config_loader import PipelineConfig
+from .tagging import TagEngine, TaggingSettings
 
-# Default local cities; override in config
-DEFAULT_LOCAL_CITIES = ["braintree","quincy","weymouth","dedham","milton","hingham","needham","brookline","cambridge","somerville","boston"]
+logger = logging.getLogger(__name__)
 
-def any_kw(text, patterns):
-    t = (text or "").lower()
-    for p in patterns:
-        if re.search(p, t):
-            return True
-    return False
+DEFAULT_LOCAL_CITIES = ["braintree", "quincy", "weymouth", "dedham", "milton", "hingham", "needham", "brookline", "cambridge", "somerville", "boston"]
 
-def extract_domain_set(emails_field):
-    domains: Set[str] = set()
-    if not isinstance(emails_field, str) or not emails_field.strip():
-        return domains
-    parts = [p for p in emails_field.split("|") if p.strip()]
-    for p in parts:
-        email = p.split("::")[0].strip().lower()
-        if "@" in email:
-            domains.add(email.split("@")[1])
-    return domains
 
-def tag_row(row, cfg):
-    tags=set()
-    text_blob = " ".join([
-        _sget(row, "company"), _sget(row, "title"), _sget(row, "linkedin_url")
-    ]).lower()
-
-    # from lineage_notes added by optional enrichment (if present)
-    if "notes_blob" in row and row["notes_blob"]:
-        text_blob += " " + _norm(row["notes_blob"])
-
-    # martial arts
-    if any_kw(text_blob, MARTIAL_KWS):
-        tags.add("martial_arts")
-
-    # nutcracker
-    if any_kw(text_blob, NUTCRACKER_KWS):
-        tags.add("nutcracker_performance")
-
-    # work colleague: via prior companies or email domains
-    prior_companies = [_norm(c) for c in cfg.get("prior_companies", [])]
-    prior_domains = [_norm(d) for d in cfg.get("prior_domains", [])]
-    company = _norm(row["company"])
-    if company and any(pc in company for pc in prior_companies):
-        tags.add("work_colleague")
-    domains = extract_domain_set(_sget(row, "emails"))
-    if any(any(pd1 in dom for pd1 in prior_domains) for dom in domains):
-        tags.add("work_colleague")
-
-    # local cities from addresses_json
-    try:
-        addrs = json.loads(row.get("addresses_json", "") or "[]")
-    except Exception:
-        addrs = []
-    local_cities = [_norm(c) for c in cfg.get("local_cities", DEFAULT_LOCAL_CITIES)]
-    for a in addrs:
-        city = _norm(a["city"])
-        state = _norm(a["state"])
-        if state and state == "ma" and city and any(city == lc or lc in city for lc in local_cities):
-            tags.add("local_south_shore"); break
-
-    # primary relationship category: personal > professional > local_referral
-    if "martial_arts" in tags or "nutcracker_performance" in tags:
-        primary = "personal"
-    elif "work_colleague" in tags or str(row.get("linkedin_url", "")).strip():
-        primary = "professional"
-    elif "local_south_shore" in tags:
-        primary = "local_referral"
-    else:
-        primary = "uncategorized"
-
-    return tags, primary
-
-def referral_priority(row, confidence_weight=0.6, tag_weights=None):
-    """
-    Combine confidence_score (0-100) with tag proximity.
-    tag_weights default:
-      martial_arts +30, nutcracker +25, work_colleague +20, local_south_shore +10
-    """
-    if tag_weights is None:
-        tag_weights = {"martial_arts":30, "nutcracker_performance":25, "work_colleague":20, "local_south_shore":10}
-    try:
-        conf = float(row.get("confidence_score", 0) or 0)
-    except Exception:
-        conf = 0.0
-    score: float = conf * confidence_weight
-    tags = set(_sget(row, "tags").split("|")) if row.get("tags") else set()
-    score += sum(tag_weights.get(t, 0) for t in tags)
-    # cap at 100
-    return int(min(100, round(score, 0)))
-
-def load_gmail_notes(path):
-    """Return dict (source_row_id -> notes text) for gmail CSV."""
+def _load_gmail_notes(path: Optional[str]) -> Dict[str, str]:
     notes: Dict[str, str] = {}
-    if _warn_missing(path, "GMail"): return notes
+    if warn_missing(path, "GMail"):
+        return notes
     df = read_csv_with_optional_header(path)
-    if "Notes" not in df.columns: return notes
-    for i, row in df.iterrows():
-        n = _norm(row["Notes"])
-        if n:
-            notes[str(i)] = n
+    if "Notes" not in df.columns:
+        return notes
+    for idx, row in df.iterrows():
+        note = safe_get(row, "Notes")
+        if note:
+            notes[str(idx)] = note
     return notes
 
 
-def load_vcf_notes(path):
-    """Basic NOTE extraction from VCF, returns dict of (index -> note)."""
+def _load_vcf_notes(path: Optional[str]) -> Dict[str, str]:
+    if warn_missing(path, "Mac VCF"):
+        return {}
+    with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+        content = handle.read()
     results: Dict[str, str] = {}
-    if _warn_missing(path, "Mac VCF"): return results
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
-    blocks = re.split(r"END:VCARD", content)
+    blocks = content.split("END:VCARD")
     idx = 0
-    for b in blocks:
-        if "BEGIN:VCARD" not in b: continue
-        m = re.search(r"^NOTE:(.+)$", b, flags=re.MULTILINE)
-        if m:
-            results[str(idx)] = m.group(1).strip()
+    for block in blocks:
+        if "BEGIN:VCARD" not in block:
+            continue
+        for line in block.splitlines():
+            if line.startswith("NOTE:"):
+                results[str(idx)] = line[5:].strip()
+                break
         idx += 1
     return results
 
-def build(args):
-    import yaml  # type: ignore
-    cfg: Dict[str, Any] = {}
-    if args.config:
-        with open(args.config, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    outputs = cfg.get("outputs", {})
-    tagging_cfg = cfg.get("tagging", {})
-    inputs = cfg.get("inputs", {})
 
-    contacts_csv = args.contacts_csv or os.path.join(outputs.get("dir", os.getcwd()), "consolidated_contacts.csv")
-    lineage_csv = args.lineage_csv or os.path.join(outputs.get("dir", os.getcwd()), "consolidated_lineage.csv")
-    out_dir = args.out_dir or outputs.get("dir", os.getcwd())
+def _resolve_paths(args: argparse.Namespace, config: PipelineConfig) -> tuple[str, str, str]:
+    outputs_dir = config.outputs.dir
+    contacts_csv = getattr(args, "contacts_csv", None) or config.inputs.get("contacts_csv") or str(outputs_dir / "consolidated_contacts.csv")
+    lineage_csv = getattr(args, "lineage_csv", None) or str(outputs_dir / "consolidated_lineage.csv")
+    out_dir = getattr(args, "out_dir", None) or outputs_dir
+    return contacts_csv, lineage_csv, str(out_dir)
 
-    # optional sources for notes
-    gmail_csv = args.gmail_csv or inputs.get("gmail_csv")
-    mac_vcf = args.mac_vcf or inputs.get("mac_vcf")
+
+def _build_notes_map(lineage_csv: str, gmail_notes: Dict[str, str], vcf_notes: Dict[str, str]) -> Dict[str, str]:
+    notes: Dict[str, str] = {}
+    try:
+        lineage_df = pd.read_csv(lineage_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
+    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as exc:
+        logger.warning("Unable to build notes map from lineage: %s", exc)
+        return notes
+    for contact_id, chunk in lineage_df.groupby("contact_id"):
+        snippets = []
+        for _, row in chunk.iterrows():
+            source = safe_get(row, "source")
+            row_id = safe_get(row, "source_row_id")
+            if source == "gmail" and row_id in gmail_notes:
+                snippets.append(gmail_notes[row_id])
+            elif source == "mac_vcf" and row_id in vcf_notes:
+                snippets.append(vcf_notes[row_id])
+        if snippets:
+            notes[contact_id] = " | ".join(snippets)
+    return notes
+
+
+def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None):
+    config = config or load_config(args)
+    contacts_csv, lineage_csv, out_dir = _resolve_paths(args, config)
+
+    gmail_notes = _load_gmail_notes(config.inputs.get("gmail_csv"))
+    vcf_notes = _load_vcf_notes(config.inputs.get("mac_vcf"))
+    notes_map = _build_notes_map(lineage_csv, gmail_notes, vcf_notes)
 
     df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
-    # join confidence if present
-    conf_path = os.path.join(outputs.get("dir", os.getcwd()), "confidence_report.csv")
-    if os.path.exists(conf_path):
-        conf_df = pd.read_csv(conf_path, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)[["contact_id","confidence_score"]]
+    confidence_path = config.outputs.dir / "confidence_report.csv"
+    if confidence_path.exists():
+        conf_df = pd.read_csv(confidence_path, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)[["contact_id", "confidence_score"]]
         df = df.merge(conf_df, on="contact_id", how="left")
 
-    # Build notes blob per contact by looking up lineage → source row notes
-    notes_map = {}
-    try:
-        lin = pd.read_csv(lineage_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
-        gmail_notes = load_gmail_notes(gmail_csv)
-        vcf_notes = load_vcf_notes(mac_vcf)
-        for cid, chunk in lin.groupby("contact_id"):
-            texts=[]
-            for _, r in chunk.iterrows():
-                src = str(r.get("source",""))
-                rid = str(r.get("source_row_id",""))
-                if src == "gmail" and rid in gmail_notes:
-                    texts.append(gmail_notes[rid])
-                elif src == "mac_vcf" and rid in vcf_notes:
-                    texts.append(vcf_notes[rid])
-            if texts:
-                notes_map[cid] = " | ".join(texts)
-    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as e:
-        logging.getLogger(__name__).warning("Unable to build notes_map from lineage: %s", e)
+    tagging_settings = TaggingSettings(
+        prior_companies=config.tagging.prior_companies or [],
+        prior_domains=config.tagging.prior_domains or [],
+        local_cities=config.tagging.local_cities or DEFAULT_LOCAL_CITIES,
+    )
+    tag_engine = TagEngine(tagging_settings)
 
-    # Apply tagging
-    tag_list=[]; primary_list=[]; notes_blob_list=[]
+    tag_values = []
+    primary_values = []
+    notes_values = []
     for _, row in df.iterrows():
-        cid = row.get("contact_id","")
-        if cid in notes_map:
-            row["notes_blob"] = notes_map[cid]
-        tags, primary = tag_row(row, {
-            "prior_companies": tagging_cfg.get("prior_companies", []),
-            "prior_domains": tagging_cfg.get("prior_domains", []),
-            "local_cities": tagging_cfg.get("local_cities", DEFAULT_LOCAL_CITIES)
-        })
-        tag_list.append("|".join(sorted(tags)) if tags else "")
-        primary_list.append(primary)
-        notes_blob_list.append(notes_map.get(cid, ""))
+        contact_id = safe_get(row, "contact_id")
+        row_data = dict(row)
+        if contact_id in notes_map:
+            row_data["notes_blob"] = notes_map[contact_id]
+        tags, primary = tag_engine.tag_record(row_data)
+        tag_values.append("|".join(sorted(tags)) if tags else "")
+        primary_values.append(primary)
+        notes_values.append(notes_map.get(contact_id, ""))
 
-    df["tags"] = tag_list
-    df["relationship_category"] = primary_list
+    df["tags"] = tag_values
+    df["relationship_category"] = primary_values
     if "confidence_score" not in df.columns:
         df["confidence_score"] = 0
-    df["notes_blob"] = notes_blob_list
+    df["notes_blob"] = notes_values
 
-    # referral priority
     try:
-        df["referral_priority_score"] = [referral_priority(r) for r in df.to_dict(orient="records")]
-    except Exception as e:
-        logging.getLogger(__name__).warning("Unable to calculate referral_priority_score: %s", e)
+        df["referral_priority_score"] = [
+            TagEngine.compute_referral_priority(record)
+            for record in df.to_dict(orient="records")
+        ]
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Unable to calculate referral_priority_score: %s", exc)
         df["referral_priority_score"] = None
 
-    # Save outputs
     out_contacts = os.path.join(out_dir, "tagged_contacts.csv")
     df.to_csv(out_contacts, index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)
 
-    # top targets
-    top = df.copy()
-    top = top.sort_values(["referral_priority_score","confidence_score"], ascending=[False, False])
+    top = df.sort_values(["referral_priority_score", "confidence_score"], ascending=[False, False])
     out_targets = os.path.join(out_dir, "referral_targets.csv")
     top.to_csv(out_targets, index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)
 
     print(f"Saved: {out_contacts}")
     print(f"Saved: {out_targets}")
     return 0
+
 
 def main():
     parser = argparse.ArgumentParser(description="Tag and categorize contacts; compute referral priority.")
@@ -234,6 +151,7 @@ def main():
     parser.add_argument("--out-dir", type=str, default=None)
     args = parser.parse_args()
     return build(args)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

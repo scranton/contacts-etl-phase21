@@ -1,8 +1,12 @@
-import os, csv, argparse
-import pandas as pd
-from typing import Dict, Any
+import argparse
+import csv
+import os
+from typing import Dict, Any, Tuple
 
-from contacts_etl.common import _warn_missing
+import pandas as pd
+
+from contacts_etl.common import load_config, warn_missing
+from contacts_etl.config_loader import PipelineConfig
 
 
 def pct(n, d):
@@ -12,7 +16,8 @@ def pct(n, d):
 def load_validation_map(validation_csv) -> Dict[str, Dict[str, int]]:
     """Returns mapping contact_id -> metrics dict with int values."""
     v: Dict[str, Dict[str, int]] = {}
-    if _warn_missing(validation_csv, "validation CSV"): return v
+    if warn_missing(validation_csv, "validation CSV"):
+        return v
     df = pd.read_csv(validation_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
     # Cast numeric fields safely
     for col in ["email_valid_count","email_total","phone_valid_count","phone_total","addr_valid_count","addr_total","quality_score"]:
@@ -95,8 +100,15 @@ def confidence_score(row, vmap: Dict[str, Dict[str, int]]) -> int:
     return int(max(0, min(100, score)))
 
 
+def _resolve_paths(args: argparse.Namespace, config: PipelineConfig) -> Tuple[str, str, str]:
+    outputs_dir = config.outputs.dir
+    contacts_csv = getattr(args, "contacts_csv", None) or config.inputs.get("contacts_csv") or str(outputs_dir / "consolidated_contacts.csv")
+    validation_csv = getattr(args, "validation_csv", None) or str(outputs_dir / "validation_report.csv")
+    out_dir = getattr(args, "out_dir", None) or outputs_dir
+    return contacts_csv, validation_csv, str(out_dir)
+
+
 def main():
-    import yaml  # type: ignore
     parser = argparse.ArgumentParser(description="Compute confidence scores and summary for consolidated contacts.")
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--contacts-csv", type=str, default=None)
@@ -104,18 +116,12 @@ def main():
     parser.add_argument("--out-dir", type=str, default=None)
 
     args = parser.parse_args()
-    cfg: Dict[str, Any] = {}
-    if args.config:
-        with open(args.config, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    outputs = cfg.get("outputs", {})
-    args.contacts_csv = args.contacts_csv or os.path.join(outputs.get("dir", os.getcwd()), "consolidated_contacts.csv")
-    args.validation_csv = args.validation_csv or os.path.join(outputs.get("dir", os.getcwd()), "validation_report.csv")
-    out_dir = args.out_dir or outputs.get("dir", os.getcwd())
+    config = load_config(args)
+    contacts_csv, validation_csv, out_dir = _resolve_paths(args, config)
 
     # Load data
-    contacts_df = pd.read_csv(args.contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
-    vmap = load_validation_map(args.validation_csv)
+    contacts_df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
+    vmap = load_validation_map(validation_csv)
 
     # Compute per-contact confidence
     scores = []
