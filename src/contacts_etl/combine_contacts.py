@@ -4,7 +4,7 @@ import argparse
 import csv
 import json
 import logging
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from dataclasses import replace
 import re
 from typing import Dict, List, Optional, Set, Tuple
@@ -117,6 +117,66 @@ def _extract_phone_values(raw: str) -> List[str]:
     return [candidate for candidate in candidates if candidate]
 
 
+def _normalize_label(label: str) -> str:
+    return (label or "").strip().lower()
+
+
+def _normalize_phone_label(label: str) -> str:
+    return _normalize_label(label)
+
+
+def _record_phone(
+    phone_map: "OrderedDict[str, str]", raw_value: str, label: str
+) -> None:
+    value = (raw_value or "").strip()
+    if not value:
+        return
+    label_norm = _normalize_phone_label(label)
+    current = phone_map.get(value)
+    if current is None or (not current and label_norm):
+        phone_map[value] = label_norm
+
+
+def _record_email(
+    email_map: "OrderedDict[str, str]", raw_value: str, label: str
+) -> None:
+    value = (raw_value or "").strip()
+    if not value:
+        return
+    label_norm = _normalize_label(label)
+    current = email_map.get(value)
+    if current is None or (not current and label_norm):
+        email_map[value] = label_norm
+
+
+def _extract_type_tokens(params: List[str]) -> List[str]:
+    raw_tokens: List[str] = []
+    for param in params:
+        if not param:
+            continue
+        if "=" in param:
+            key, val = param.split("=", 1)
+            if key.strip().lower() == "type":
+                for token in re.split(r"[;,]", val):
+                    token = token.strip()
+                    if token:
+                        raw_tokens.append(token.lower())
+        else:
+            raw_tokens.extend(
+                token.strip().lower() for token in param.split(",") if token.strip()
+            )
+
+    normalized: List[str] = []
+    for token in raw_tokens:
+        if token in {"pref", "internet"}:
+            continue
+        if token.startswith("x-"):
+            token = token[2:]
+        if token:
+            normalized.append(token)
+    return normalized
+
+
 def _extract_email_values(raw: str) -> List[str]:
     if not raw:
         return []
@@ -142,7 +202,7 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
     df = read_csv_with_optional_header(path)
     records: List[ContactRecord] = []
     for idx, row in df.iterrows():
-        emails: List[Email] = []
+        email_map: "OrderedDict[str, str]" = OrderedDict()
         for column in row.index:
             if not str(column).startswith("E-mail ") or not str(column).endswith(" - Value"):
                 continue
@@ -150,11 +210,12 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             if not email_value_raw:
                 continue
             label_col = str(column).replace(" - Value", " - Type")
-            email_label = safe_get(row, label_col).lower()
+            email_label = _normalize_label(safe_get(row, label_col))
             for extracted in _extract_email_values(email_value_raw):
-                emails.append(Email(value=extracted, label=email_label))
+                _record_email(email_map, extracted, email_label)
+        emails = [Email(value=value, label=label) for value, label in email_map.items()]
 
-        phones: List[Phone] = []
+        phones_map: "OrderedDict[str, str]" = OrderedDict()
         for column in row.index:
             if not str(column).startswith("Phone ") or not str(column).endswith(" - Value"):
                 continue
@@ -162,11 +223,13 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             if not phone_value_raw:
                 continue
             label_col = str(column).replace(" - Value", " - Label")
-            phone_label = safe_get(row, label_col).lower()
+            phone_label = _normalize_phone_label(safe_get(row, label_col))
             for extracted in _extract_phone_values(phone_value_raw):
-                phones.append(Phone(value=extracted, label=phone_label))
+                _record_phone(phones_map, extracted, phone_label)
 
-        addresses: List[Address] = []
+        phones = [Phone(value=value, label=label) for value, label in phones_map.items()]
+
+        address_map: "OrderedDict[str, Address]" = OrderedDict()
         address_ids: Set[str] = set()
         for column in row.index:
             match = re.match(r"Address (\d+) - ", str(column))
@@ -182,13 +245,19 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
                 state=safe_get(row, f"Address {addr_id} - Region"),
                 postal_code=safe_get(row, f"Address {addr_id} - Postal Code"),
                 country=safe_get(row, f"Address {addr_id} - Country"),
-                label=safe_get(row, f"Address {addr_id} - Label"),
+                label=_normalize_label(safe_get(row, f"Address {addr_id} - Label")),
             )
+            key_payload = address_entry.to_dict()
+            key_payload.pop("label", None)
+            key = json.dumps(key_payload, sort_keys=True)
             if any(
                 getattr(address_entry, field)
                 for field in ("street", "city", "state", "postal_code", "country", "po_box")
             ):
-                addresses.append(address_entry)
+                existing = address_map.get(key)
+                if existing is None or (not existing.label and address_entry.label):
+                    address_map[key] = address_entry
+        addresses = list(address_map.values())
         raw_full = " ".join(
             [safe_get(row, "First Name"), safe_get(row, "Middle Name"), safe_get(row, "Last Name")]
         ).strip()
@@ -220,6 +289,9 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
     for idx, block in enumerate(blocks):
         b = f"{block}END:VCARD"
         record = ContactRecord(source="mac_vcf", source_row_id=str(idx))
+        phone_map: "OrderedDict[str, str]" = OrderedDict()
+        address_map: "OrderedDict[str, Address]" = OrderedDict()
+        email_map: "OrderedDict[str, str]" = OrderedDict()
         for line in b.splitlines():
             if line.startswith("FN:"):
                 record.full_name_raw = line[3:].strip()
@@ -241,12 +313,47 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                             ],
                         )
                     ).strip()
-            elif "EMAIL" in line and ":" in line:
-                value = line.split(":", 1)[1].strip()
-                record.emails.append(Email(value=value, label=""))
-            elif "TEL" in line and ":" in line:
-                value = line.split(":", 1)[1].strip()
-                record.phones.append(Phone(value=value, label=""))
+            elif line.upper().startswith("EMAIL") and ":" in line:
+                params_part, value = line.split(":", 1)
+                params = params_part.split(";")[1:]
+                email_tokens = _extract_type_tokens(params)
+                preferred_email_labels = [
+                    "work",
+                    "home",
+                    "other",
+                ]
+                label = ""
+                for preferred in preferred_email_labels:
+                    if preferred in email_tokens:
+                        label = preferred
+                        break
+                if not label and email_tokens:
+                    label = email_tokens[0]
+                _record_email(email_map, value, label)
+            elif line.upper().startswith("TEL") and ":" in line:
+                params_part, value = line.split(":", 1)
+                params = params_part.split(";")[1:]
+                tokens = _extract_type_tokens(params)
+                label = ""
+                preferred_order = [
+                    "mobile",
+                    "cell",
+                    "iphone",
+                    "work",
+                    "home",
+                    "main",
+                    "fax",
+                    "pager",
+                    "other",
+                    "voice",
+                ]
+                for preferred in preferred_order:
+                    if preferred in tokens:
+                        label = preferred
+                        break
+                if not label and tokens:
+                    label = tokens[0]
+                _record_phone(phone_map, value, label)
             elif line.startswith("ADR"):
                 parts = line.split(":", 1)[1].split(";")
                 address = Address(
@@ -258,7 +365,12 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                     postal_code=parts[5].strip() if len(parts) > 5 else "",
                     country=parts[6].strip() if len(parts) > 6 else "",
                 )
-                record.addresses.append(address)
+                key_payload = address.to_dict()
+                key_payload.pop("label", None)
+                key = json.dumps(key_payload, sort_keys=True)
+                existing = address_map.get(key)
+                if existing is None or (not existing.label and address.label):
+                    address_map[key] = address
             elif line.startswith("ORG:"):
                 record.company = line[4:].strip()
             elif line.startswith("TITLE:"):
@@ -267,6 +379,9 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                 record.linkedin_url = line[4:].strip()
             elif line.startswith("NOTE:"):
                 record.notes = line[5:].strip()
+        record.emails = [Email(value=value, label=label) for value, label in email_map.items()]
+        record.phones = [Phone(value=value, label=label) for value, label in phone_map.items()]
+        record.addresses = list(address_map.values())
         records.append(record)
     return records
 

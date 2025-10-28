@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import unicodedata
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from io import StringIO
@@ -465,8 +466,7 @@ def strip_suffixes_and_parse_name(
 def normalize_email_collection(
     values: Sequence[Email], check_deliverability: bool = False
 ) -> Tuple[List[Email], List[str]]:
-    out: List[Email] = []
-    seen: Set[str] = set()
+    email_map: "OrderedDict[str, str]" = OrderedDict()
     invalid: List[str] = []
     for entry in values:
         normalized_value = validate_email_safe(
@@ -476,10 +476,11 @@ def normalize_email_collection(
             if entry.value:
                 invalid.append(entry.value.strip())
             continue
-        if normalized_value in seen:
-            continue
-        seen.add(normalized_value)
-        out.append(Email(value=normalized_value, label=entry.label))
+        candidate_label = _normalize_label_generic(getattr(entry, "label", ""))
+        current_label = email_map.get(normalized_value)
+        if current_label is None or (not current_label and candidate_label):
+            email_map[normalized_value] = candidate_label
+    out: List[Email] = [Email(value=value, label=label) for value, label in email_map.items()]
     return out, invalid
 
 
@@ -548,21 +549,24 @@ def normalize_address(address: Address) -> Address:
         state=normalize_state(state),
         postal_code=postal_code.strip(),
         country=normalize_country_iso2(address.country),
-        label=address.label,
+        label=_normalize_label_generic(address.label),
     )
 
 
 def normalize_address_collection(values: Sequence[Address]) -> List[Address]:
-    seen: Set[str] = set()
-    normalized: List[Address] = []
+    normalized_map: "OrderedDict[str, Address]" = OrderedDict()
     for entry in values:
         addr = normalize_address(entry)
-        key = json.dumps(addr.to_dict(), sort_keys=True)
-        if key in seen:
-            continue
-        seen.add(key)
-        normalized.append(addr)
-    return normalized
+        key_payload = addr.to_dict()
+        key_payload.pop("label", None)
+        key = json.dumps(key_payload, sort_keys=True)
+        if key in normalized_map:
+            existing = normalized_map[key]
+            if not existing.label and addr.label:
+                normalized_map[key] = addr
+        else:
+            normalized_map[key] = addr
+    return list(normalized_map.values())
 
 
 def strip_emails_from_text_and_capture(text: str, accumulator: List[Email]) -> str:
@@ -808,3 +812,7 @@ def address_keys_for_match(addresses: Sequence[Dict[str, Any]]) -> set[tuple[str
 
 def normalize_text_key(value: str) -> str:
     return _norm(value)
+
+
+def _normalize_label_generic(label: str) -> str:
+    return (label or "").strip().lower()
