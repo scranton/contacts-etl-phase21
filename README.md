@@ -1,114 +1,162 @@
 
-# contacts-etl
+# Contact Cleansing Pipeline
 
-Contact consolidation + validation + confidence + tagging toolkit.
-Designed for use in **JetBrains DataSpell** or any Python environment.
+Merge contacts exported from macOS Contacts (vCard), Gmail, and LinkedIn into a unified dataset, enrich the records, and prioritize outreach targets.
 
 ---
 
-## Quickstart (DataSpell)
+## Requirements
 
-1. **Open** this folder (`contacts-etl`) in DataSpell.
-2. Create a **virtual environment** (Pyenv/Conda/venv).
-3. Install the package (editable mode) with optional extras:
+- Python **3.9 – 3.11**
+- `pip` (or `uv`, `pipx`, etc.) for dependency management
+- Optional extras:
+  - `validation` extra enables email/phone validation (`email-validator`, `phonenumberslite`, `dnspython`, `usaddress`)
+  - `dedupe` extra enables advanced record linkage (`recordlinkage`, `numpy`)
+  - `dev` extra installs testing/tooling (`pytest`, `pytest-cov`, `mypy`, `flake8`, `black`, `isort`)
+
+Data files are expected under the repository by default:
+
+- `data/mac.vcf` — export from macOS Contacts
+- `data/gmail.csv` — Gmail contacts export
+- `data/linkedin.csv` — LinkedIn connections export
+
+You can override paths in `config.yaml`.
+
+---
+
+## Project Layout
+
+```
+contacts-etl-phase21/
+├── config.yaml
+├── data/
+│   ├── gmail.csv
+│   ├── linkedin.csv
+│   └── mac.vcf
+├── output/               # created by the pipeline
+├── src/
+│   └── contacts_etl/
+│       ├── combine_contacts.py
+│       ├── validate_quality.py
+│       ├── confidence_report.py
+│       ├── tag_contacts.py
+│       ├── common.py
+│       └── __init__.py
+├── tests/
+│   └── test_combine_helpers.py
+├── scripts/
+│   └── inspect.ipynb
+├── pyproject.toml
+└── README.md
+```
+
+---
+
+## Environment Setup
+
+1. Copy the sample configuration and adjust paths/weights:
    ```bash
+   cp config.example.yaml config.yaml
+   # edit config.yaml to point at your data and tweak tagging settings
+   ```
+2. Create a virtual environment and install the package in editable mode:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -e '.[validation,dedupe,dev]'
    ```
-   *(add `,dedupe` if you plan to use advanced record linkage later)*
+   *(omit extras you do not need)*.
 
-4. Copy `config.example.yaml` to `config.yaml` and adjust:
-   - Input file paths
-   - Prior companies/domains (for work colleagues)
-   - Local cities list (for South Shore targeting)
+3. Verify the CLI entry points are on your PATH: `contacts-consolidate --help`.
 
-5. Run the full pipeline:
+---
 
+## IDE Quickstarts
+
+### JetBrains DataSpell
+
+1. **Open** the project root in DataSpell.
+2. Create a new interpreter (`.venv`, Conda, or Pyenv) and install with `pip install -e '.[validation,dedupe,dev]'`.
+3. Use the built-in **Run/Debug Configurations**:
+   - Create a new *Python* configuration per command (`contacts-consolidate`, `contacts-validate`, etc.).
+   - Set the working directory to the project root and pass `--config config.yaml`.
+4. Use DataSpell notebooks (`scripts/inspect.ipynb`) for ad-hoc inspection if needed.
+
+### Visual Studio Code
+
+1. Open the folder in VS Code and select the `.venv` interpreter from the command palette (`Python: Select Interpreter`).
+2. Install the recommended extensions (`ms-python.python`).
+3. Create `.vscode/launch.json` entries or use the integrated terminal:
    ```bash
-   # Phase 1: Consolidate multiple sources
+   source .venv/bin/activate
    contacts-consolidate --config config.yaml
-
-   # Phase 1.0: Validate & score basic data quality
-   contacts-validate --config config.yaml
-
-   # Phase 1.5: Compute overall confidence scores
-   contacts-confidence --config config.yaml
-
-   # Phase 2: Apply tagging & referral prioritization
-   contacts-tag --config config.yaml
    ```
-
-All outputs are written to the folder defined in your `outputs.dir`
-(default `/mnt/data`).
+4. Configure *Run Task* definitions if you prefer one-click execution of pipeline stages.
 
 ---
 
-## Outputs Overview
+## Pipeline Overview
 
-| Stage | Command | Key Output Files | Description |
-|--------|----------|------------------|--------------|
-| **Consolidation** | `contacts-consolidate` | `consolidated_contacts.csv`, `consolidated_lineage.csv` | Unified master contact list with lineage tracking |
-| **Validation** | `contacts-validate` | `validation_report.csv`, `contact_quality_scored.csv` | Email/phone/address validation & quality scores |
-| **Confidence** | `contacts-confidence` | `confidence_report.csv`, `confidence_summary.csv` | Overall per-contact confidence (0–100) |
-| **Tagging & Referral** | `contacts-tag` | `tagged_contacts.csv`, `referral_targets.csv` | Tags, categories, and referral priority scores |
+| Stage | Command | Key Output Files | Purpose |
+|-------|---------|------------------|---------|
+| Consolidation | `contacts-consolidate --config config.yaml` | `output/consolidated_contacts.csv`, `output/consolidated_lineage.csv` | Merge sources, normalize data, track lineage |
+| Validation | `contacts-validate --config config.yaml` | `output/validation_report.csv`, `output/contact_quality_scored.csv` | Score data quality for emails, phones, and addresses |
+| Confidence | `contacts-confidence --config config.yaml` | `output/confidence_report.csv`, `output/confidence_summary.csv` | Derive overall contact confidence scores and distribution |
+| Tagging & Referral | `contacts-tag --config config.yaml` | `output/tagged_contacts.csv`, `output/referral_targets.csv` | Apply configured tags, relationship categories, and referral priority |
 
----
-
-## Tagging & Referral Rules
-
-Configured in the `tagging:` section of your YAML config.
-
-| Tag | Trigger (examples) | Relationship Category |
-|-----|--------------------|------------------------|
-| `martial_arts` | “Tai Chi”, “Wu An”, “Wu Dao”, “Shaolin”, “Martial Arts” | personal |
-| `nutcracker_performance` | “Nutcracker”, “Cherub”, “Jose Mateo”, “Ballet” | personal |
-| `work_colleague` | Company or email domain matches prior employers (GridGain, Red Hat, Tetrate, etc.) | professional |
-| `local_south_shore` | Address city matches configured local cities (Braintree, Quincy, Dedham…) | local_referral |
-
-`referral_priority_score = (0.6 × confidence_score) + tag bonuses`, capped at 100.
-
-Outputs include:
-- **`tags`** — pipe-delimited list of matched tags  
-- **`relationship_category`** — personal / professional / local_referral / uncategorized  
-- **`referral_priority_score`** — overall referral potential (0–100)
+All commands respect the `outputs.dir` setting in `config.yaml`. Adjust this if you want results in a different location.
 
 ---
 
-## Example: Warm Outreach Export
+## Tagging Rules (configurable)
+
+The `tagging` section of `config.yaml` controls the heuristics. Default rules map to:
+
+| Tag | Trigger Examples | Relationship Category |
+|-----|------------------|-----------------------|
+| `martial_arts` | Mentions of Tai Chi, Wu Dao, Kung Fu, Shaolin | personal |
+| `nutcracker_performance` | Mentions of Nutcracker, Cherub, Jose Mateo | personal |
+| `work_colleague` | Prior employer matches or email domains | professional |
+| `local_south_shore` | Massachusetts city in configured local list | local_referral |
+
+Referral priority is computed as `0.6 * confidence_score + tag bonuses`, capped at 100.
+
+---
+
+## Warm Outreach Example
 
 ```bash
 contacts-tag --config config.yaml
-# Then filter tagged_contacts.csv for:
-# relationship_category in ("personal", "professional")
-# and referral_priority_score >= 60
+# Filter output/tagged_contacts.csv for:
+#   relationship_category in ("personal", "professional")
+#   referral_priority_score >= 60
 ```
-This generates `referral_targets.csv` sorted by referral priority, ideal for outreach or CRM import.
+
+This yields `output/referral_targets.csv` sorted by referral priority.
 
 ---
 
-## Project Structure
+## Testing & Tooling
 
-```
-contacts-etl/
-├── pyproject.toml
-├── README.md
-├── config.example.yaml
-└── src/
-    └── contacts_etl/
-        ├── combine_contacts.py
-        ├── validate_quality.py
-        ├── confidence_report.py
-        ├── tag_contacts.py
-        ├── common.py
-        └── __init__.py
-```
+- Run unit tests (requires `dev` extras):
+  ```bash
+  python3 -m pytest
+  ```
+- Static analysis and linting:
+  ```bash
+  mypy src
+  flake8 src tests
+  black --check src tests
+  isort --check-only src tests
+  ```
 
 ---
 
-## Notes
+## Additional Notes
 
-- All CSVs are fully quoted for safe import into Excel or Pandas.
-- Default country for phone normalization is **US**.
-- Confidence and referral scores are capped at **100**.
-- The pipeline is modular: you can rerun any phase independently.
+- All CSV outputs are fully quoted for compatibility with Excel and Pandas.
+- Phone normalization defaults to the United States (`normalization.default_phone_country`).
+- Confidence and referral scores are capped at 100.
+- Each pipeline phase can be re-run independently; downstream stages read the latest CSVs from `outputs.dir`.
 
----
+Happy consolidating!
