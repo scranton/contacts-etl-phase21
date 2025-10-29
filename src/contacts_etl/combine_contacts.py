@@ -7,7 +7,7 @@ import logging
 from collections import defaultdict, OrderedDict
 from dataclasses import replace
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -64,6 +64,32 @@ DEFAULT_PROF = {
 
 
 PHONE_VALUE_PATTERN = re.compile(r"\+?\d[\d\s()./-]{6,}\d")
+
+SOURCE_PRIORITY = {
+    "linkedin": 3,
+    "mac_vcf": 2,
+    "gmail": 1,
+}
+
+
+def _source_priority(record: ContactRecord) -> int:
+    return SOURCE_PRIORITY.get((record.source or "").lower(), 0)
+
+
+def _choose_by_priority(
+    records: List[ContactRecord], getter: Callable[[ContactRecord], str]
+) -> str:
+    best_value = ""
+    best_priority = -1
+    for record in records:
+        value = getter(record)
+        if not value:
+            continue
+        priority = _source_priority(record)
+        if priority > best_priority:
+            best_priority = priority
+            best_value = value
+    return best_value
 
 
 def _build_normalization_settings(config: PipelineConfig) -> NormalizationSettings:
@@ -522,16 +548,14 @@ def _merge_cluster(
     best_first, _ = choose_best_first_name(cluster_records)
 
     template = cluster_records[0]
-    middle = next((record.middle_name for record in cluster_records if record.middle_name), "")
-    last = next((record.last_name for record in cluster_records if record.last_name), "")
-    maiden = next((record.maiden_name for record in cluster_records if record.maiden_name), "")
-    suffix = next((record.suffix for record in cluster_records if record.suffix), "")
-    prof_suffixes = next(
-        (record.suffix_professional for record in cluster_records if record.suffix_professional), ""
-    )
-    company = next((record.company for record in cluster_records if record.company), "")
-    title = next((record.title for record in cluster_records if record.title), "")
-    linkedin = next((record.linkedin_url for record in cluster_records if record.linkedin_url), "")
+    middle = _choose_by_priority(cluster_records, lambda r: r.middle_name)
+    last = _choose_by_priority(cluster_records, lambda r: r.last_name)
+    maiden = _choose_by_priority(cluster_records, lambda r: r.maiden_name)
+    suffix = _choose_by_priority(cluster_records, lambda r: r.suffix)
+    prof_suffixes = _choose_by_priority(cluster_records, lambda r: r.suffix_professional)
+    company = _choose_by_priority(cluster_records, lambda r: r.company)
+    title = _choose_by_priority(cluster_records, lambda r: r.title)
+    linkedin = _choose_by_priority(cluster_records, lambda r: r.linkedin_url)
 
     all_emails: Dict[str, str] = {}
     all_phones: Dict[str, str] = {}
