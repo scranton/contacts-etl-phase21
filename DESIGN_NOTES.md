@@ -1,150 +1,114 @@
 # Design Notes
 
-These notes capture the intent behind the contact consolidation pipeline so future contributors understand why the current heuristics exist and how to extend them safely.
+Implementation details, heuristics, and extension guidelines for the contacts ETL pipeline.
 
 ---
 
-## 1. Data Sources & Expectations
+## 1. Source Loaders
 
-| Source | Format | Key Fields | Reliability |
-|--------|--------|------------|-------------|
-| macOS Contacts | VCF (v3) | Structured name components, free-form notes, multiple phones/emails | High for personal details, sparse for company/title |
-| Gmail Export | CSV | Multiple labeled emails/phones, addresses, notes | Medium; labels matter, but names are often free-form |
-| LinkedIn Export | CSV | First/last name, company, position, profile URL, optional email | High for professional attributes |
+### 1.1 LinkedIn CSV (`_load_linkedin_csv`)
+- Fields ingested: first/last name, company, title, LinkedIn URL, optional email.
+- No phone labels provided; emails arrive without `TYPE=` metadata.
+- Each row is assigned `source="linkedin"`, `source_row_id=str(index)`.
 
-Each loader normalizes into a shared contact dictionary (`emails`, `phones`, `addresses`, `company`, `title`, `source`, `source_row_id`). The merge pipeline assumes **string** fields with leading/trailing whitespace already trimmed and multi-value fields represented as lists of dictionaries.
+### 1.2 Gmail CSV (`_load_gmail_csv`)
+- Captures up to N emails/phones/addresses by iterating over `E-mail N - Value` columns, splitting multi-value cells (`foo@bar ::: baz@qux`) and deduplicating via `OrderedDict`.
+- Labels: normalized to lowercase; duplicates favour a non-empty label if present.
+- Phones: `Phone N - Label` is normalized and used when not blank; duplicates unify on value.
+- Addresses: deduped on normalized address payload (label ignored in key but preserved when present).
+- Emits `source="gmail"`.
 
----
+### 1.3 macOS Contacts VCF (`_load_vcards`)
+- Parses vCard 3.0 records. For each entry:
+  - Names (`FN`, `N`) populate structured fields.
+  - Emails (`EMAIL`) and phones (`TEL`) parse `TYPE=` parameters while ignoring `pref` and `internet`. Vendor extensions (`X-foo`) drop the `x-` prefix. Preferred label order: `work`, `home`, `other` for emails; `mobile`, `cell`, `iphone`, `work`, `home`, etc. for phones.
+  - Addresses (`ADR`) deduped similar to Gmail.
+  - Notes (`NOTE`), company (`ORG`), title (`TITLE`), and LinkedIn URL (`URL`) captured when present.
+- Emits `source="mac_vcf"`, `source_row_id=str(index)`.
 
-## 2. Consolidation Heuristics
-
-### 2.1 Name Normalization
-
-- Best-first-name selection uses nickname equivalence (`William` ≈ `Bill`) and frequency weighting so the most corroborated variant wins.
-- Multi-part surnames (e.g., `de la Cruz`) are preserved by scanning for particles.
-- Embedded emails are stripped from name fields to avoid polluting dedupe keys.
-- When multiple sources provide competing name components, LinkedIn contributions win, followed by macOS VCF, then Gmail. The same priority order applies to company/title/suffix metadata so fresher sources take precedence.
-
-**When extending**: keep `strip_suffixes_and_parse_name` as the single entry point so suffix logic and maiden-name extraction stay consistent across sources.
-
-### 2.2 Email Handling
-
-- Every email passes through `validate_email_safe`. If the optional `email_validator` dependency is available, deliverability is checked; otherwise a regex fallback is used.
-- Duplicate emails are removed while preserving the best available label (labels are normalized to lowercase and VCF tokens like `pref`/`internet`/`X-*` prefixes are ignored).
-- Emails extracted from free-text fields (names, notes) are appended with an empty label so downstream phases can still locate them.
-- Invalid emails are surfaced in `invalid_emails` for auditing rather than silently discarded.
-
-### 2.3 Phone & Address Normalization
-
-- `normalize_phone` wraps E.164 formatting via `phonenumbers` when installed; without it the fallback enforces a `+` country code and basic digit rules.
-- Phone numbers and addresses are deduplicated using normalized keys while keeping any meaningful lowercase label (labels from VCF/Gmail `TYPE=` tokens are honoured when present).
-- Addresses retain all components but do a light parse to fill in missing city/state/postal when the street field includes them inline.
-- Full postal standardization is intentionally out of scope; complex fixes should happen downstream in tools like OpenRefine.
-
-### 2.4 Merge Decisioning
-
-- Records are bucketed by normalized last name to reduce comparisons.
-- Pairwise scoring includes:
-  - First-name similarity (nickname aware)
-  - Exact overlap of emails, phones, addresses (two or more components), LinkedIn URL
-  - Generational suffix match
-- A successful merge requires either:
-  - Total score ≥ `merge_score_threshold`, or
-  - First-name similarity ≥ threshold *and* total score ≥ `relaxed_merge_threshold`
-- If either contact lacks a clear first/last name, at least one corroborator (email/phone/address/linkedin) must match.
-- When both contacts provide first names, we only merge if the normalized names match, the pair is nickname-equivalent, or there is explicit email/LinkedIn corroboration. This prevents housemates sharing an address or phone from collapsing.
-- Global `require_corroborator` can tighten the rule set via `config.yaml`.
-- When multiple records contribute non-empty values for the same field (company/title/suffix/LinkedIn URL, etc.), the merge prefers LinkedIn over macOS VCF over Gmail so the most recent data flows into the consolidated row.
-
-**Guiding principle**: default to high precision so manual review handles the ambiguous cases.
+**Extension tips**: New loaders must populate `source`, `source_row_id`, and fill lists (`emails`, `phones`, `addresses`) with already-normalized structures so the downstream normalization step can operate consistently.
 
 ---
 
-## 3. Lineage Tracking
+## 2. Normalization
 
-For every merged contact:
+Implemented in `normalization.py` and used via `normalize_contact_record`.
 
-- `contact_id` is a deterministic UUID built from normalized name, deduped emails/phones, and the contributing `(source, source_row_id)` pairs. Including lineage keys keeps IDs stable while ensuring distinct people in the same household stay separate.
-- `consolidated_lineage.csv` contains one row per source record with full snapshots of original fields (even if later normalized). This is the canonical place to investigate a merge and verify provenance.
-- VCF rows now receive sequential `source_row_id` values to align with notes extraction.
-- `consolidated_contacts.csv` reports both `source_count` (unique source systems) and `source_row_count` (total contributing rows). The builder fails fast if any duplicate `contact_id` slips through.
+### 2.1 Names
+- Uses nickname map (`_NICKMAP`) and weighted counts to choose best first name (`choose_best_first_name`). Source priority is applied afterward (LinkedIn > mac_vcf > Gmail) for middle/last/suffix.
+- Multi-part surnames handled via particle detection.
+- Emails embedded in name fields are stripped/collected by `strip_emails_from_text_and_capture`.
 
-When adding new sources, ensure:
+### 2.2 Emails
+- `normalize_email_collection` dedupes on normalized address, fallback to regex when `email_validator` unavailable.
+- Labels normalized to lowercase; optional `TYPE=` tokens from VCF/Gmail are honoured except `pref`/`internet`/`x-*` which are filtered.
+- Invalid emails recorded in `invalid_emails` (retained in lineage and consolidated outputs).
 
-1. Source loader sets `source` and `source_row_id`.
-2. Loader emits raw notes/emails/phones so normalization can dedupe consistently.
+### 2.3 Phones
+- `normalize_phone_collection` attempts E.164 formatting via `phonenumbers`. Failed formatting records trimmed raw value in `non_standard_phones` while keeping label when possible.
+- Deduped on normalized number; label retained if non-empty.
 
----
-
-## 4. Scoring & Tagging Intent
-
-### 4.1 Validation Quality Score (`contacts-validate`)
-
-- Email: +40 if all emails are syntactically valid, +20 if at least one valid.
-- Phone: +30 if all phones are valid, +15 if at least one valid.
-- Address: +30 when any address includes street plus city or postal code.
-- Output includes JSON details so analysts can drill down per contact.
-
-**Extensions**: consider weighting corporate domains higher once DNS checks are reliable in the deployment environment.
-
-### 4.2 Confidence Score (`contacts-confidence`)
-
-- Base 0–40 from validation quality (scaled).
-- Corroborators (email/phone/address/linkedin) up to +20.
-- Lineage depth bonus (up to +10) rewards contacts seen in multiple sources.
-- LinkedIn URL and company/title add professional context (up to +15 combined).
-- Validated channels add up to +10, presence of full name adds +5.
-
-Scores map into buckets (`very_high`, `high`, `medium`, `low`) for dashboards.
-
-### 4.3 Tagging & Referral (`contacts-tag`)
-
-- Tags:
-  - `martial_arts`, `nutcracker_performance` capture personal affinity signals.
-  - `work_colleague` flags prior employer/domain matches.
-  - `local_south_shore` uses MA cities configured in YAML.
-- Relationship categories follow a priority order: personal → professional → local → uncategorized.
-- Referral priority = `0.6 * confidence_score + tag bonuses` (capped at 100).
-- Notes from Gmail/VCF feed a `notes_blob` column to aid manual review.
-
-**Future ideas**: add negative tags (e.g., “do not contact”), integrate CRM status, or allow tag weight overrides per deployment.
+### 2.4 Addresses
+- `normalize_address` fills missing city/state/postal when embedded in street line; ISO 2-letter country/state normalization.
+- `normalize_address_collection` dedupes dictionary payload (excluding label) and preserves label when one copy supplies it.
 
 ---
 
-## 5. Configuration Philosophy
+## 3. Merge Heuristics (`combine_contacts.py`)
 
-`config.yaml` is the single source of truth for:
+### 3.1 Bucketing & Pairing
+- Records bucketed by normalized last name; fallback to full name/email/phone or unique `__blank_{idx}`.
+- `MergeEvaluator` scores pairs via first-name similarity (nickname aware), corroborators (email/phone/address/linkedin), suffix match.
+- Merge allowed if score ≥ threshold or meets relaxed criteria + corroboration. `require_corroborator=True` enforces at least one channel match.
 
-- Input paths (`inputs`)
-- Output directory (`outputs.dir`)
-- Normalization toggles (default country, suffix lists)
-- Dedupe thresholds & nickname equivalence flag
-- Validation options (MX lookup, strict phone validation)
-- Tagging parameters (companies, domains, local cities)
+### 3.2 Source Priority
+- Metadata selection (company, title, suffixes, LinkedIn URL, middle/last/maiden names) respects priority: LinkedIn (3) > mac_vcf (2) > Gmail (1). Helper `_choose_by_priority` picks the highest-priority non-empty field.
+- Emails/phones/addresses from all sources are combined, deduped, and labels preserved as described above.
 
-CLI arguments mirror most keys with the convention **CLI > config > default**. When adding new config options, extend both the CLI parser and `build` function so library and CLI usage stay in sync.
-
----
-
-## 6. Testing Roadmap (Future)
-
-- Add fixture-driven tests for multi-source merges with conflicting data.
-- Cover confidence score edge cases (e.g., zero corroborators but high quality).
-- Integration smoke test that runs the full pipeline on a synthetic dataset and diff-checks outputs.
-
-Until then, unit tests highlight the most fragile heuristics:
-
-- Nickname equivalence toggle
-- VCF row-id assignment and notes propagation
-- Phone normalization fallbacks
+### 3.3 Output Assembly
+- Contact rows include core fields plus joined channel summaries (`emails`, `phones`, etc.). Extra metadata (`invalid_emails`, `non_standard_phones`) stored in `record.extra` and emitted to CSV.
+- Lineage rows capture raw values (`source_emails_raw`, `source_phones_raw`) plus normalization drop details for audit.
 
 ---
 
-## 7. Operational Notes
+## 4. Scoring & Tagging
 
-- CSV outputs are fully quoted (`csv.QUOTE_ALL`) to keep Excel import safe.
-- Phone normalization assumes US country defaults; consider parameterizing per deployment.
-- The repository avoids shipping PII in tests. Example data should remain synthetic.
-- CI (if enabled) must redact any email/phone details from logs.
+### 4.1 Validation (`contacts-validate`)
+- Email score: +40 if all valid, +20 if at least one valid.
+- Phone score: +30 if all valid, +15 if any valid.
+- Address score: +30 if any address has street + (city or postal).
+- Output includes detail columns (`emails_detail`, etc.) and summary metrics.
 
-Maintaining these practices ensures the pipeline’s behavior stays predictable, auditable, and privacy-conscious.
+### 4.2 Confidence (`contacts-confidence`)
+- Weighted aggregate using validation quality, corroborators, lineage depth, LinkedIn presence, company/title, validated channels, and completeness of name.
+- Buckets: `very_high` (≥80), `high` (≥60), `medium` (≥40), `low` (<40).
+
+### 4.3 Tagging (`contacts-tag`)
+- Uses `TagEngine` with configurable prior companies/domains/local cities.
+- Tags: `martial_arts`, `nutcracker_performance`, `work_colleague`, `local_south_shore` (extendable in config).
+- Relationship category prioritized: personal → professional → local → uncategorized.
+- Referral priority = `0.6 * confidence_score + tag weights` (capped at 100).
+- Notes from Gmail/VCF merged into `notes_blob` when available.
+
+---
+
+## 5. Configuration & Logging
+
+- `config.yaml` defines inputs, output directory, normalization settings, dedupe thresholds, validation options, tagging heuristics, and `logging.level`.
+- CLI flags mirror most keys; precedence is `CONTACTS_ETL_LOG_LEVEL` env var > CLI `--log-level` > config value > default `WARNING`.
+
+---
+
+## 6. Testing & CI Notes
+
+- Unit tests (`make test`) cover helper functions (nickname equivalence, VCF row IDs, normalization fallbacks).
+- Future work: synthetic end-to-end fixtures, confidence score edge cases, regression diffs on consolidated outputs.
+- Keep tests/data synthetic to avoid leaking PII.
+
+---
+
+## 7. Operational Checklist
+
+- Review `output/consolidated_contacts.csv` for duplicates or unexpected drop counts after changes.
+- Check insight notebooks for invalid emails/non-standard phones before sharing outputs.
+- Regenerate outputs (`make pipeline`) after tweaking normalization or merge heuristics.

@@ -1,47 +1,47 @@
-# Context
+# Context & Goals
 
 ## Business Objectives
 
-- Produce a consolidated contacts dataset that can be fed directly into CRM or outreach tooling.
-- Preserve lineage so every merged record can be traced back to its source rows.
-- Score and tag contacts so that warm outreach, referrals, and quality reviews can be prioritized quickly.
+- Deliver a CRM-ready consolidated contacts dataset sourced from LinkedIn, macOS Contacts (VCF), and Gmail exports.
+- Preserve lineage and provenance (`consolidated_lineage.csv`) so every merged record is auditable.
+- Provide scoring/tagging to accelerate outreach triage and warm introductions.
+
+## Desired Outcomes
+
+- **Accuracy**: High precision merges that prefer the most recent source (LinkedIn > macOS VCF > Gmail) while retaining alternate channel data for review.
+- **Transparency**: Outputs surface any discarded emails/phones (`invalid_emails`, `non_standard_phones`) and expose source counts for each contact.
+- **Operational Readiness**: Pipeline commands (`make pipeline` or stage-specific CLI) are fast enough for iterative reruns and produce consistent artifacts for downstream tools.
 
 ## Non-Goals (for now)
 
-- No advanced postal address standardization beyond light normalization.
-- No automated enrichment from third-party APIs or data brokers.
-- No ML-driven fuzzy dedupe beyond the rule-based heuristics already in the pipeline.
+- Advanced postal address standardization beyond the current lightweight heuristics.
+- Automated enrichment from third-party APIs or data brokers.
+- Machine-learning-based dedupe models (rule-based similarity only).
+
+## Data Sources & Expectations
+
+| Source | Format | Strengths | Caveats |
+|--------|--------|-----------|---------|
+| LinkedIn export | CSV | Fresh company/title, LinkedIn URL, reliable name components | Email often missing; phone labels absent |
+| macOS Contacts | VCF v3 | Structured name parts, handwritten notes, labelled phones/emails | Professional metadata often stale |
+| Gmail export | CSV | Multiple emails/phones with labels, addresses, notes | Names are free-form; many unlabeled phones |
 
 ## Privacy & Security
 
-- Treat all contact data as confidential.
-- Never upload raw data to third-party services outside this repo/CI.
-- CI must redact PII from logs/artifacts.
+- Treat all contact data as confidential and keep raw exports within the repo boundary.
+- CI/logs must redact PII.
+- Example datasets used in tests/docs are synthetic.
 
-## Source Truth Handling
+## Evaluation & Review Flow
 
-Field precedence is handled heuristically in code:
+- Run pipeline stages in order (`contacts-consolidate` → `contacts-validate` → `contacts-confidence` → `contacts-tag`).
+- Review `output/consolidated_contacts.csv` and `...lineage.csv` for merge sanity.
+- Use `output/validation_report.csv`, `output/confidence_report.csv`, and `output/referral_targets.csv` to drive CRM import decisions.
+- Insight notebooks (`scripts/*_insights.ipynb`) surface top contacts and flagged channel issues.
 
-1. **Email** — normalized values are deduped with lowercase labels when provided (VCF/Gmail `TYPE=` tokens such as `pref`/`internet` are ignored). Validity checks remove syntactically invalid addresses while retaining the raw value for review.
-2. **Name** — a normalized “best” first name is chosen across sources (nickname-aware), with middle/surname pulled from the highest-priority source that supplies each component; suffixes are preserved.
-3. **Company / Title** — sources are prioritized in recency order: LinkedIn > macOS VCF > Gmail. The merge selects the first non-empty value respecting that priority so newer data wins by default.
+## Success Signals
 
-The `consolidated_lineage.csv` export always records which source rows contributed to each merged contact so discrepancies can be audited.
-
-- `contact_id` generation now incorporates the contributing `(source, source_row_id)` pairs, and the consolidation step aborts if duplicates appear. Investigate any failure here before trusting downstream CSVs.
-- `source_count` captures the number of distinct systems (e.g., Gmail vs. LinkedIn) behind a contact, while `source_row_count` reports how many raw records were merged.
-- `invalid_emails` and `non_standard_phones` columns in `consolidated_contacts.csv` surface any channel data that normalization had to drop for follow-up remediation.
-
-## Review Flow
-
-1. Run the pipeline commands in order:
-   - `contacts-consolidate --config config.yaml`
-   - `contacts-validate --config config.yaml`
-   - `contacts-confidence --config config.yaml`
-   - `contacts-tag --config config.yaml`
-2. Inspect `output/consolidated_contacts.csv` and `output/consolidated_lineage.csv` for merge verification.
-3. Use `output/validation_report.csv`, `output/confidence_report.csv`, and `output/referral_targets.csv` to drive outreach or CRM import.
-
-## Testing & Privacy
-
-- Install test tooling with `pip install -e '.[tests]'` (or `.[dev]`) and run `python3 -m pytest`. The suite uses only synthetic data, so it is safe to execute in shared environments.
+- No duplicate `contact_id` values (pipeline aborts if detected).
+- Invalid/uncertain channel data is visible (not silently dropped).
+- Lineage columns (`source`, `source_row_id`, `source_count`) are populated for every consolidated record.
+- Tests (`make test`) run on synthetic data and pass without exposing PII.
