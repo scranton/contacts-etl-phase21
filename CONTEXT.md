@@ -22,9 +22,9 @@
 
 Field precedence is handled heuristically in code:
 
-1. **Email** — normalized values are deduped; corporate vs. free-mail is not ranked yet, but duplicates are removed and validity is checked where possible.
-2. **Name** — a normalized “best” first name is chosen across sources (nickname-aware), with middle/surname filled from the first non-empty source; suffixes are preserved.
-3. **Company / Title** — whichever source offers a value first wins; LinkedIn data naturally tends to dominate because those exports provide explicit company/title fields.
+1. **Email** — normalized values are deduped with lowercase labels when provided (VCF/Gmail `TYPE=` tokens such as `pref`/`internet` are ignored). Validity checks remove syntactically invalid addresses while retaining the raw value for review.
+2. **Name** — a normalized “best” first name is chosen across sources (nickname-aware), with middle/surname pulled from the highest-priority source that supplies each component; suffixes are preserved.
+3. **Company / Title** — sources are prioritized in recency order: LinkedIn > macOS VCF > Gmail. The merge selects the first non-empty value respecting that priority so newer data wins by default.
 
 The `consolidated_lineage.csv` export always records which source rows contributed to each merged contact so discrepancies can be audited.
 

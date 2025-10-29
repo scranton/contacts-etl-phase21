@@ -206,6 +206,8 @@ This yields `output/referral_targets.csv` sorted by referral priority.
 ## Additional Notes
 
 - Consolidated outputs include `invalid_emails` and `non_standard_phones` columns so you can trace discarded channel data; the insight notebooks provide ready-made views of those issues.
+- When multiple sources provide conflicting metadata, LinkedIn wins, followed by macOS Contacts (VCF), then Gmail. This priority applies to fields such as company, title, suffixes, and LinkedIn URLs.
+- Emails, phones, and addresses are deduplicated with normalized, lowercase labels (when provided). Vendor-specific VCF tokens such as `TYPE=pref`/`TYPE=internet` are ignored so labels remain clean.
 - The consolidation stage raises an error if duplicate `contact_id` values are produced; this catches determinism or merge regressions early.
 - `source_count` reflects the number of distinct source systems contributing to a contact, while `source_row_count` captures the total number of source rows merged.
 - All CSV outputs are fully quoted for compatibility with Excel and Pandas.

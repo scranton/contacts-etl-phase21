@@ -23,18 +23,21 @@ Each loader normalizes into a shared contact dictionary (`emails`, `phones`, `ad
 - Best-first-name selection uses nickname equivalence (`William` ≈ `Bill`) and frequency weighting so the most corroborated variant wins.
 - Multi-part surnames (e.g., `de la Cruz`) are preserved by scanning for particles.
 - Embedded emails are stripped from name fields to avoid polluting dedupe keys.
+- When multiple sources provide competing name components, LinkedIn contributions win, followed by macOS VCF, then Gmail. The same priority order applies to company/title/suffix metadata so fresher sources take precedence.
 
 **When extending**: keep `strip_suffixes_and_parse_name` as the single entry point so suffix logic and maiden-name extraction stay consistent across sources.
 
 ### 2.2 Email Handling
 
 - Every email passes through `validate_email_safe`. If the optional `email_validator` dependency is available, deliverability is checked; otherwise a regex fallback is used.
-- Duplicate emails are removed while preserving the first-seen label (e.g., `work`, `home`).
+- Duplicate emails are removed while preserving the best available label (labels are normalized to lowercase and VCF tokens like `pref`/`internet`/`X-*` prefixes are ignored).
 - Emails extracted from free-text fields (names, notes) are appended with an empty label so downstream phases can still locate them.
+- Invalid emails are surfaced in `invalid_emails` for auditing rather than silently discarded.
 
 ### 2.3 Phone & Address Normalization
 
 - `normalize_phone` wraps E.164 formatting via `phonenumbers` when installed; without it the fallback enforces a `+` country code and basic digit rules.
+- Phone numbers and addresses are deduplicated using normalized keys while keeping any meaningful lowercase label (labels from VCF/Gmail `TYPE=` tokens are honoured when present).
 - Addresses retain all components but do a light parse to fill in missing city/state/postal when the street field includes them inline.
 - Full postal standardization is intentionally out of scope; complex fixes should happen downstream in tools like OpenRefine.
 
@@ -51,6 +54,7 @@ Each loader normalizes into a shared contact dictionary (`emails`, `phones`, `ad
 - If either contact lacks a clear first/last name, at least one corroborator (email/phone/address/linkedin) must match.
 - When both contacts provide first names, we only merge if the normalized names match, the pair is nickname-equivalent, or there is explicit email/LinkedIn corroboration. This prevents housemates sharing an address or phone from collapsing.
 - Global `require_corroborator` can tighten the rule set via `config.yaml`.
+- When multiple records contribute non-empty values for the same field (company/title/suffix/LinkedIn URL, etc.), the merge prefers LinkedIn over macOS VCF over Gmail so the most recent data flows into the consolidated row.
 
 **Guiding principle**: default to high precision so manual review handles the ambiguous cases.
 
