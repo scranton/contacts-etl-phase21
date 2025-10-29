@@ -12,8 +12,13 @@ from contacts_etl.common import (
     safe_get,
     warn_missing,
 )
-from contacts_etl.models import Address, Phone
-from contacts_etl.normalization import format_phone_e164_safe, is_valid_phone_safe
+from contacts_etl.models import Address, Email, Phone
+from contacts_etl.normalization import (
+    NormalizationSettings,
+    format_phone_e164_safe,
+    is_valid_phone_safe,
+    normalize_contact_record,
+)
 
 
 def test_safe_get_and_warn_missing(tmp_path):
@@ -224,6 +229,138 @@ def test_build_keeps_distinct_household_members(monkeypatch):
     assert set(contacts_df["first_name"]) == {"Alex", "Riley"}
     assert set(contacts_df["source_count"].astype(int)) == {1}
     assert set(contacts_df["source_row_count"].astype(int)) == {1}
+
+
+def test_merge_prefers_linkedin_metadata(monkeypatch):
+    linkedin_record = ContactRecord(
+        source="linkedin",
+        source_row_id="1",
+        first_name="Jordan",
+        last_name="Example",
+        company="Future Corp",
+        title="Principal Engineer",
+        linkedin_url="https://linkedin.com/in/jordan-example",
+    )
+    gmail_record = ContactRecord(
+        source="gmail",
+        source_row_id="2",
+        first_name="Jordan",
+        last_name="Example",
+        company="Old Employer",
+        title="Developer",
+        linkedin_url="",
+    )
+
+    monkeypatch.setattr(cc, "_load_sources", lambda config: [linkedin_record, gmail_record])
+
+    args = SimpleNamespace(
+        config=None,
+        linkedin_csv=None,
+        gmail_csv=None,
+        mac_vcf=None,
+        out_dir=None,
+        default_phone_country="US",
+        first_name_similarity_threshold=0.0,
+        merge_score_threshold=0.0,
+        relaxed_merge_threshold=0.0,
+        require_corroborator=False,
+        keep_generational_suffixes=None,
+        professional_suffixes=None,
+        enable_nickname_equivalence=True,
+    )
+
+    contacts_df, _ = cc.build(args)
+    assert len(contacts_df) == 1
+    merged = contacts_df.iloc[0]
+    assert merged["company"] == "Future Corp"
+    assert merged["title"] == "Principal Engineer"
+    assert merged["linkedin_url"] == "https://linkedin.com/in/jordan-example"
+
+
+def test_normalize_email_dedup_preserves_best_label():
+    record = ContactRecord(
+        emails=[
+            Email(value="primary@example.com", label=""),
+            Email(value="primary@example.com", label="work"),
+            Email(value="SECONDARY@example.com", label="HOME"),
+            Email(value="secondary@example.com", label=""),
+        ]
+    )
+    settings = NormalizationSettings(default_phone_country="US")
+    normalized = normalize_contact_record(record, settings)
+    assert normalized.emails == [
+        Email(value="primary@example.com", label="work"),
+        Email(value="SECONDARY@example.com", label="home"),
+        Email(value="secondary@example.com", label=""),
+    ]
+
+
+def test_load_vcards_filters_pref_and_internet_labels(tmp_path):
+    vcf = "\n".join(
+        [
+            "BEGIN:VCARD",
+            "VERSION:3.0",
+            "FN:Casey Example",
+            "N:Example;Casey;;;",
+            "EMAIL;TYPE=INTERNET;TYPE=WORK;TYPE=pref:casey.work@example.com",
+            "EMAIL;TYPE=INTERNET:casey.other@example.com",
+            "TEL;TYPE=CELL;TYPE=pref:+1-555-000-0003",
+            "TEL;TYPE=VOICE:+1-555-000-0004",
+            "END:VCARD",
+            "",
+        ]
+    )
+    path = tmp_path / "labels.vcf"
+    path.write_text(vcf, encoding="utf-8")
+
+    records = cc._load_vcards(str(path))
+    assert len(records) == 1
+    entry = records[0]
+    assert entry.emails == [
+        Email(value="casey.work@example.com", label="work"),
+        Email(value="casey.other@example.com", label=""),
+    ]
+    assert entry.phones == [
+        Phone(value="+1-555-000-0003", label="cell"),
+        Phone(value="+1-555-000-0004", label="voice"),
+    ]
+
+
+def test_address_dedup_keeps_label():
+    record = ContactRecord(
+        addresses=[
+            Address(
+                street="1 Maple Street",
+                city="Sampletown",
+                state="MA",
+                postal_code="02144",
+                country="US",
+                label="home",
+            ),
+            Address(
+                street="1 Maple Street",
+                city="Sampletown",
+                state="MA",
+                postal_code="02144",
+                country="US",
+                label="",
+            ),
+        ]
+    )
+    settings = NormalizationSettings(default_phone_country="US")
+    normalized = normalize_contact_record(record, settings)
+    assert normalized.addresses == [
+        Address(
+            po_box="",
+            extended="",
+            street="1 Maple Street",
+            city="Sampletown",
+            state="MA",
+            postal_code="02144",
+            country="US",
+            label="home",
+        )
+    ]
 
 
 if __name__ == "__main__":

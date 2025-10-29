@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Casey Example
+N:Example;Casey;;;
+EMAIL;TYPE=INTERNET;TYPE=WORK;TYPE=pref:casey.work@example.com
+EMAIL;TYPE=INTERNET:casey.other@example.com
+TEL;TYPE=CELL;TYPE=pref:+1-555-000-0003
+TEL;TYPE=VOICE:+1-555-000-0004
+END:VCARD
