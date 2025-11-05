@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, List
 
 from .models import ContactRecord
 from .normalization import address_keys_for_match, nickname_equivalent, seq_ratio
@@ -23,12 +23,30 @@ class MergeEvaluator:
     def __init__(self, nickname_equivalence: bool = True):
         self.nickname_equivalence = nickname_equivalence
 
+    @staticmethod
+    def first_name_candidates(record: ContactRecord) -> List[str]:
+        candidates: List[str] = []
+        for value in (record.first_name, getattr(record, "nickname", "")):
+            value = (value or "").strip()
+            if value and value not in candidates:
+                candidates.append(value)
+        return candidates
+
     def compute(self, a: ContactRecord, b: ContactRecord) -> MergeSignals:
         score = 0.0
         corroborators = 0
 
-        first_similarity = seq_ratio(a.first_name, b.first_name)
-        if self.nickname_equivalence and nickname_equivalent(a.first_name, b.first_name):
+        first_options = self.first_name_candidates(a)
+        second_options = self.first_name_candidates(b)
+        similarities = [
+            seq_ratio(left, right) for left in first_options for right in second_options
+        ]
+        first_similarity = (
+            max(similarities) if similarities else seq_ratio(a.first_name, b.first_name)
+        )
+        if self.nickname_equivalence and any(
+            nickname_equivalent(left, right) for left in first_options for right in second_options
+        ):
             first_similarity = max(first_similarity, 0.96)
         score += 0.7 * first_similarity
 
@@ -67,4 +85,8 @@ class MergeEvaluator:
 
     @staticmethod
     def either_nameless(records: Iterable[ContactRecord]) -> bool:
-        return any(not (record.first_name and record.last_name) for record in records)
+        for record in records:
+            candidates = MergeEvaluator.first_name_candidates(record)
+            if not (candidates and record.last_name):
+                return True
+        return False

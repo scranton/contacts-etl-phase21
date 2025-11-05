@@ -85,6 +85,7 @@ class ContactRecord:
     maiden_name: str = ""
     suffix: str = ""
     suffix_professional: str = ""
+    nickname: str = ""
     company: str = ""
     title: str = ""
     linkedin_url: str = ""
@@ -127,6 +128,7 @@ class ContactRecord:
             maiden_name=str(payload.get("maiden_name", "") or "").strip(),
             suffix=str(payload.get("suffix", "") or "").strip(),
             suffix_professional=str(payload.get("suffix_professional", "") or "").strip(),
+            nickname=str(payload.get("nickname", "") or "").strip(),
             company=str(payload.get("company", "") or "").strip(),
             title=str(payload.get("title", "") or "").strip(),
             linkedin_url=str(payload.get("linkedin_url", "") or "").strip(),
@@ -151,6 +153,7 @@ class ContactRecord:
             "maiden_name": self.maiden_name,
             "suffix": self.suffix,
             "suffix_professional": self.suffix_professional,
+            "nickname": self.nickname,
             "company": self.company,
             "title": self.title,
             "linkedin_url": self.linkedin_url,

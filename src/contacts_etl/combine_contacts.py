@@ -335,6 +335,7 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             full_name_raw=raw_full,
             prefix=name_prefix,
             suffix=name_suffix,
+            nickname=safe_get(row, "Nickname"),
             company=safe_get(row, "Organization Name"),
             title=safe_get(row, "Organization Title"),
             source="gmail",
@@ -386,6 +387,8 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                             ],
                         )
                     ).strip()
+            elif ":" in line and line.split(":", 1)[0].upper().split(";")[0].endswith("NICKNAME"):
+                record.nickname = line.split(":", 1)[1].strip()
             elif line.upper().startswith("EMAIL") and ":" in line:
                 params_part, value = line.split(":", 1)
                 params = params_part.split(";")[1:]
@@ -525,19 +528,30 @@ def _cluster_indices(
                     signals.first_similarity >= first_threshold and score >= relaxed
                 )
 
-                either_nameless = not (left.first_name and left.last_name) or not (
-                    right.first_name and right.last_name
+                left_name_candidates = MergeEvaluator.first_name_candidates(left)
+                right_name_candidates = MergeEvaluator.first_name_candidates(right)
+
+                def _has_core_name(record: ContactRecord, candidates: List[str]) -> bool:
+                    return bool(candidates and record.last_name)
+
+                either_nameless = not _has_core_name(left, left_name_candidates) or not _has_core_name(
+                    right, right_name_candidates
                 )
                 if either_nameless and not signals.has_corroborator:
                     ok = False
 
-                if left.first_name and right.first_name:
-                    left_first = normalize_text_key(left.first_name)
-                    right_first = normalize_text_key(right.first_name)
-                    nickname_eq = evaluator.nickname_equivalence and nickname_equivalent(
-                        left.first_name, right.first_name
+                if left_name_candidates and right_name_candidates:
+                    names_align = any(
+                        normalize_text_key(a) == normalize_text_key(b)
+                        for a in left_name_candidates
+                        for b in right_name_candidates
+                        if a and b
                     )
-                    names_align = bool(left_first and right_first and left_first == right_first)
+                    nickname_eq = evaluator.nickname_equivalence and any(
+                        nickname_equivalent(a, b)
+                        for a in left_name_candidates
+                        for b in right_name_candidates
+                    )
                     linkedin_match = bool(
                         left.linkedin_url and left.linkedin_url == right.linkedin_url
                     )
@@ -550,11 +564,18 @@ def _cluster_indices(
                             right.last_name
                         )
                         gen_eq = normalize_text_key(left.suffix) == normalize_text_key(right.suffix)
-                        first_eq = normalize_text_key(left.first_name) == normalize_text_key(
-                            right.first_name
-                        )
-                        nickname_eq = evaluator.nickname_equivalence and nickname_equivalent(
-                            left.first_name, right.first_name
+                        first_eq = False
+                        if left_name_candidates and right_name_candidates:
+                            first_eq = any(
+                                normalize_text_key(a) == normalize_text_key(b)
+                                for a in left_name_candidates
+                                for b in right_name_candidates
+                                if a and b
+                            )
+                        nickname_eq = evaluator.nickname_equivalence and any(
+                            nickname_equivalent(a, b)
+                            for a in left_name_candidates
+                            for b in right_name_candidates
                         )
                         if not (last_eq and (first_eq or nickname_eq) and gen_eq):
                             ok = False
@@ -601,6 +622,7 @@ def _merge_cluster(
     maiden = _choose_by_priority(cluster_records, lambda r: r.maiden_name)
     suffix = _choose_by_priority(cluster_records, lambda r: r.suffix)
     prof_suffixes = _choose_by_priority(cluster_records, lambda r: r.suffix_professional)
+    nickname_value = _choose_by_priority(cluster_records, lambda r: r.nickname)
     company = _choose_by_priority(cluster_records, lambda r: r.company)
     title = _choose_by_priority(cluster_records, lambda r: r.title)
     linkedin = _choose_by_priority(cluster_records, lambda r: r.linkedin_url)
@@ -670,6 +692,7 @@ def _merge_cluster(
         maiden_name=maiden,
         suffix=suffix,
         suffix_professional=prof_suffixes,
+        nickname=nickname_value,
         company=company,
         title=title,
         linkedin_url=linkedin,
@@ -767,6 +790,7 @@ def build(
                 "maiden_name": record.maiden_name,
                 "suffix": record.suffix,
                 "suffix_professional": record.suffix_professional,
+                "nickname": record.nickname,
                 "company": record.company,
                 "title": record.title,
                 "linkedin_url": record.linkedin_url,

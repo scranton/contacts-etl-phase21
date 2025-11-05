@@ -74,6 +74,24 @@ def test_load_vcards_assigns_row_ids(tmp_path):
     assert [record.source_row_id for record in rows] == ["0", "1"]
 
 
+def test_load_vcards_reads_nickname(tmp_path):
+    content = "\n".join(
+        [
+            "BEGIN:VCARD",
+            "VERSION:3.0",
+            "FN:John Doe",
+            "N:Doe;John;;;",
+            "NICKNAME:Johnny",
+            "END:VCARD",
+            "",
+        ]
+    )
+    path = tmp_path / "nick.vcf"
+    path.write_text(content, encoding="utf-8")
+    rows = cc._load_vcards(str(path))
+    assert rows[0].nickname == "Johnny"
+
+
 def test_tag_contacts_merges_vcf_notes(tmp_path):
     contacts_df = pd.DataFrame(
         [
@@ -153,6 +171,54 @@ def test_tag_contacts_merges_vcf_notes(tmp_path):
     assert tagged.loc[0, "notes_blob"] == "Prefers email intros"
 
 
+def test_load_gmail_reads_nickname(tmp_path):
+    df = pd.DataFrame(
+        [
+            {
+                "First Name": "John",
+                "Nickname": "Johnny",
+                "E-mail 1 - Value": "john@example.com",
+            }
+        ]
+    )
+    path = tmp_path / "gmail.csv"
+    df.to_csv(path, index=False, encoding="utf-8")
+    rows = cc._load_gmail_csv(str(path))
+    assert rows[0].nickname == "Johnny"
+
+
+def test_build_exposes_nickname(monkeypatch):
+    record = ContactRecord(
+        source="gmail",
+        source_row_id="0",
+        first_name="John",
+        last_name="Example",
+        nickname="Johnny",
+        emails=[Email(value="john@example.com", label="home")],
+    )
+
+    monkeypatch.setattr(cc, "_load_sources", lambda config: [record])
+
+    args = SimpleNamespace(
+        config=None,
+        linkedin_csv=None,
+        gmail_csv=None,
+        mac_vcf=None,
+        out_dir=None,
+        default_phone_country="US",
+        first_name_similarity_threshold=0.88,
+        merge_score_threshold=1.2,
+        relaxed_merge_threshold=0.6,
+        require_corroborator=False,
+        keep_generational_suffixes=None,
+        professional_suffixes=None,
+        enable_nickname_equivalence=True,
+    )
+
+    contacts_df, _ = cc.build(args)
+    assert list(contacts_df["nickname"]) == ["Johnny"]
+
+
 def test_build_respects_nickname_equivalence(monkeypatch):
     base_record = ContactRecord(
         source="gmail", source_row_id="0", first_name="Bill", last_name="Doe"
@@ -185,6 +251,36 @@ def test_build_respects_nickname_equivalence(monkeypatch):
     base_args.enable_nickname_equivalence = False
     contacts_disabled, _ = cc.build(base_args)
     assert len(contacts_disabled) == 2
+
+
+def test_build_matches_on_explicit_nickname(monkeypatch):
+    primary = ContactRecord(
+        source="gmail", source_row_id="0", first_name="William", last_name="Example"
+    )
+    secondary = ContactRecord(
+        source="gmail", source_row_id="1", first_name="", last_name="Example", nickname="Billy"
+    )
+
+    monkeypatch.setattr(cc, "_load_sources", lambda config: [primary, secondary])
+
+    args = SimpleNamespace(
+        config=None,
+        linkedin_csv=None,
+        gmail_csv=None,
+        mac_vcf=None,
+        out_dir=None,
+        default_phone_country="US",
+        first_name_similarity_threshold=0.88,
+        merge_score_threshold=1.2,
+        relaxed_merge_threshold=0.6,
+        require_corroborator=False,
+        keep_generational_suffixes=None,
+        professional_suffixes=None,
+        enable_nickname_equivalence=True,
+    )
+
+    contacts_df, _ = cc.build(args)
+    assert len(contacts_df) == 1
 
 
 def test_build_keeps_distinct_household_members(monkeypatch):
