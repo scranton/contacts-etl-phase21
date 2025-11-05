@@ -7,20 +7,24 @@ ETL toolkit for unifying contact exports from LinkedIn, macOS Contacts (VCF), an
 ## Quick Start
 
 1. **Prepare configuration**
+
    ```bash
    cp config.example.yaml config.yaml
    # edit paths, logging level, tagging heuristics, etc.
    ```
 
 2. **Bootstrap the project (virtualenv + dev deps)**
+
    ```bash
    make venv install
    ```
 
 3. **Run the full pipeline**
+
    ```bash
    make pipeline
    ```
+
    Outputs land in `output/` (changeable via `config.yaml:outputs.dir`).
 
 ---

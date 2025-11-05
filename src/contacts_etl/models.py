@@ -78,6 +78,7 @@ class ContactRecord:
     contact_id: str = ""
     full_name_raw: str = ""
     full_name: str = ""
+    prefix: str = ""
     first_name: str = ""
     middle_name: str = ""
     last_name: str = ""
@@ -119,6 +120,7 @@ class ContactRecord:
             contact_id=str(payload.get("contact_id", "") or "").strip(),
             full_name_raw=str(payload.get("full_name_raw", "") or "").strip(),
             full_name=str(payload.get("full_name", "") or "").strip(),
+            prefix=str(payload.get("prefix", "") or "").strip(),
             first_name=str(payload.get("first_name", "") or "").strip(),
             middle_name=str(payload.get("middle_name", "") or "").strip(),
             last_name=str(payload.get("last_name", "") or "").strip(),
@@ -142,6 +144,7 @@ class ContactRecord:
             "contact_id": self.contact_id,
             "full_name_raw": self.full_name_raw,
             "full_name": self.full_name,
+            "prefix": self.prefix,
             "first_name": self.first_name,
             "middle_name": self.middle_name,
             "last_name": self.last_name,
@@ -170,6 +173,7 @@ class LineageEntry:
     source: str
     source_row_id: str
     source_full_name: str
+    source_prefix: str
     source_company: str
     source_title: str
     source_emails: str
@@ -186,6 +190,7 @@ class LineageEntry:
             "source": self.source,
             "source_row_id": self.source_row_id,
             "source_full_name": self.source_full_name,
+            "source_prefix": self.source_prefix,
             "source_company": self.source_company,
             "source_title": self.source_title,
             "source_emails": self.source_emails,

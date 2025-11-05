@@ -42,6 +42,11 @@ DEFAULT_PROF = {
     "pmp",
     "csm",
     "spc6",
+    "ccim",
+    "phr",
+    "shrm",
+    "shrmcp",
+    "cp",
     "mba",
     "cissp",
     "crisc",
@@ -60,6 +65,37 @@ DEFAULT_PROF = {
     "leansixsigma",
     "esq",
     "jd",
+    "ms",
+    "rdn",
+    "ld",
+    "mpa",
+    "ise",
+    "md",
+    "mph",
+}
+
+DEFAULT_PREFIXES = {
+    "mr",
+    "mrs",
+    "ms",
+    "miss",
+    "mx",
+    "dr",
+    "prof",
+    "sir",
+    "madam",
+    "madame",
+    "lady",
+    "lord",
+    "rev",
+    "reverend",
+    "fr",
+    "father",
+    "pastor",
+    "rabbi",
+    "imam",
+    "hon",
+    "judge",
 }
 
 
@@ -95,8 +131,9 @@ def _choose_by_priority(
 def _build_normalization_settings(config: PipelineConfig) -> NormalizationSettings:
     keep_suffixes = config.normalization.keep_generational_suffixes or list(DEFAULT_GEN)
     prof_suffixes = config.normalization.professional_suffixes or list(DEFAULT_PROF)
+    name_prefixes = config.normalization.name_prefixes or list(DEFAULT_PREFIXES)
     return NormalizationSettings.from_args(
-        keep_suffixes, prof_suffixes, config.normalization.default_phone_country
+        keep_suffixes, prof_suffixes, name_prefixes, config.normalization.default_phone_country
     )
 
 
@@ -284,12 +321,20 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
                 if existing is None or (not existing.label and address_entry.label):
                     address_map[key] = address_entry
         addresses = list(address_map.values())
+        first_name = safe_get(row, "First Name")
+        middle_name = safe_get(row, "Middle Name")
+        last_name = safe_get(row, "Last Name")
+        name_prefix = safe_get(row, "Name Prefix")
+        name_suffix = safe_get(row, "Name Suffix")
         raw_full = " ".join(
-            [safe_get(row, "First Name"), safe_get(row, "Middle Name"), safe_get(row, "Last Name")]
+            part
+            for part in [name_prefix, first_name, middle_name, last_name, name_suffix]
+            if part
         ).strip()
         record = ContactRecord(
             full_name_raw=raw_full,
-            suffix=safe_get(row, "Name Suffix"),
+            prefix=name_prefix,
+            suffix=name_suffix,
             company=safe_get(row, "Organization Name"),
             title=safe_get(row, "Organization Title"),
             source="gmail",
@@ -326,12 +371,14 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                 record.last_name = components[0].strip() if len(components) > 0 else ""
                 record.first_name = components[1].strip() if len(components) > 1 else ""
                 record.middle_name = components[2].strip() if len(components) > 2 else ""
-                record.suffix = components[3].strip() if len(components) > 3 else ""
+                record.prefix = components[3].strip() if len(components) > 3 else ""
+                record.suffix = components[4].strip() if len(components) > 4 else ""
                 if not record.full_name_raw:
                     record.full_name_raw = " ".join(
                         filter(
                             None,
                             [
+                                record.prefix,
                                 record.first_name,
                                 record.middle_name,
                                 record.last_name,
@@ -548,6 +595,7 @@ def _merge_cluster(
     best_first, _ = choose_best_first_name(cluster_records)
 
     template = cluster_records[0]
+    prefix = _choose_by_priority(cluster_records, lambda r: r.prefix)
     middle = _choose_by_priority(cluster_records, lambda r: r.middle_name)
     last = _choose_by_priority(cluster_records, lambda r: r.last_name)
     maiden = _choose_by_priority(cluster_records, lambda r: r.maiden_name)
@@ -579,7 +627,7 @@ def _merge_cluster(
                 continue
             existing_label = all_phones.get(normalized_value)
             if existing_label:
-                # Prefer non-empty labels or keep existing confident label
+                # Prefer non-empty labels or keep an existing confident label
                 if phone.label and not existing_label:
                     all_phones[normalized_value] = phone.label
             else:
@@ -593,7 +641,7 @@ def _merge_cluster(
 
     deduped_addresses_json = json.dumps(all_addresses, ensure_ascii=False)
 
-    full_name_clean = " ".join(filter(None, [best_first, middle, last, suffix])).strip()
+    full_name_clean = " ".join(filter(None, [prefix, best_first, middle, last, suffix])).strip()
     lineage_keys = [
         f"{record.source}:{record.source_row_id}"
         for record in cluster_records
@@ -615,6 +663,7 @@ def _merge_cluster(
     merged = ContactRecord(
         contact_id=contact_id,
         full_name=full_name_clean,
+        prefix=prefix,
         first_name=best_first,
         middle_name=middle,
         last_name=last,
@@ -641,6 +690,7 @@ def _merge_cluster(
                 source=record.source,
                 source_row_id=record.source_row_id,
                 source_full_name=record.full_name_raw,
+                source_prefix=record.prefix,
                 source_company=record.company,
                 source_title=record.title,
                 source_emails="|".join(email.value for email in record.emails),
@@ -710,6 +760,7 @@ def build(
             {
                 "contact_id": record.contact_id,
                 "full_name": record.full_name,
+                "prefix": record.prefix,
                 "first_name": record.first_name,
                 "middle_name": record.middle_name,
                 "last_name": record.last_name,
@@ -766,6 +817,7 @@ def main() -> int:
     )
     parser.add_argument("--keep-generational-suffixes", nargs="*", default=None)
     parser.add_argument("--professional-suffixes", nargs="*", default=None)
+    parser.add_argument("--name-prefixes", nargs="*", default=None)
     parser.add_argument("--log-level", type=str, default=None, help="Override logging level")
     args = parser.parse_args()
 

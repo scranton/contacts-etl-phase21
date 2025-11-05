@@ -210,6 +210,7 @@ PARTICLES = {
 class NormalizationSettings:
     keep_generational_suffixes: Set[str] = field(default_factory=set)
     professional_suffixes: Set[str] = field(default_factory=set)
+    name_prefixes: Set[str] = field(default_factory=set)
     default_phone_country: str = "US"
 
     @classmethod
@@ -217,11 +218,13 @@ class NormalizationSettings:
         cls,
         keep_generational_suffixes: Optional[Iterable[str]],
         professional_suffixes: Optional[Iterable[str]],
+        name_prefixes: Optional[Iterable[str]],
         default_phone_country: str = "US",
     ) -> "NormalizationSettings":
         return cls(
             keep_generational_suffixes=set(s.lower() for s in (keep_generational_suffixes or [])),
             professional_suffixes=set(s.lower() for s in (professional_suffixes or [])),
+            name_prefixes=set(s.lower() for s in (name_prefixes or [])),
             default_phone_country=default_phone_country or "US",
         )
 
@@ -376,6 +379,19 @@ def normalize_prof_token(token: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (token or "").lower())
 
 
+def normalize_prefix_token(token: str) -> str:
+    return normalize_prof_token(token)
+
+
+def _looks_like_initial(token: str) -> bool:
+    token = (token or "").strip()
+    if len(token) == 2 and token[1] == "." and token[0].isalpha():
+        return True
+    if len(token) == 1 and token.isalpha() and token.isupper():
+        return True
+    return False
+
+
 def parse_name_multi_last(name_str: str) -> Tuple[str, str, str]:
     if not name_str:
         return "", "", ""
@@ -387,7 +403,7 @@ def parse_name_multi_last(name_str: str) -> Tuple[str, str, str]:
     while idx >= 1:
         token = tokens[idx]
         token_clean = (token or "").lower().strip(".")
-        if token_clean in PARTICLES or (
+        if (token_clean in PARTICLES and not _looks_like_initial(token)) or (
             token_clean in {"o", "d", "l"} and idx + 1 < len(tokens) and "'" in tokens[idx + 1]
         ):
             last_parts.insert(0, token)
@@ -405,10 +421,13 @@ def parse_name_multi_last(name_str: str) -> Tuple[str, str, str]:
 
 
 def strip_suffixes_and_parse_name(
-    full_name: str, gen_suffixes: Set[str], prof_suffixes: Set[str]
-) -> Tuple[str, str, str, str, List[str], str, str]:
+    full_name: str,
+    gen_suffixes: Set[str],
+    prof_suffixes: Set[str],
+    name_prefixes: Set[str],
+) -> Tuple[str, str, str, str, List[str], str, str, str]:
     if not full_name or str(full_name).strip() == "":
-        return "", "", "", "", [], "", ""
+        return "", "", "", "", [], "", "", ""
     name = str(full_name).strip()
     maiden = ""
     paren = re.search(r"\(([^)]+)\)", name)
@@ -420,38 +439,76 @@ def strip_suffixes_and_parse_name(
     kept_parts: List[str] = []
     gen_suffix = ""
     professional: List[str] = []
+    prefix_value = ""
+    prefix_tokens = name_prefixes or set()
+
+    def extract_prof_parts(token: str) -> List[str]:
+        token_clean = token.strip()
+        if not token_clean:
+            return []
+        normalized = normalize_prof_token(token_clean)
+        if (normalized in prof_suffixes) or normalized.endswith("spc6"):
+            return [token_clean]
+        split_candidates = [t.strip() for t in re.split(r"[\\/|&+]+", token_clean) if t.strip()]
+        if len(split_candidates) > 1:
+            parts: List[str] = []
+            for candidate in split_candidates:
+                norm = normalize_prof_token(candidate)
+                if (norm in prof_suffixes) or norm.endswith("spc6"):
+                    parts.append(candidate)
+                else:
+                    return []
+            return parts
+        return []
 
     def is_prof_token(token: str) -> bool:
-        normalized = normalize_prof_token(token)
-        return (normalized in prof_suffixes) or normalized.endswith("spc6")
+        return bool(extract_prof_parts(token))
+
+    def consume_prefix_tokens(tokens: List[str]) -> List[str]:
+        nonlocal prefix_value
+        consumed: List[str] = []
+        while tokens and normalize_prefix_token(tokens[0]) in prefix_tokens:
+            consumed.append(tokens.pop(0))
+        if consumed and not prefix_value:
+            prefix_value = " ".join(consumed)
+        return tokens
 
     for part in parts:
-        tokens = part.split()
-        if len(tokens) == 1:
-            token = tokens[0]
-            if normalize_prof_token(token) in gen_suffixes:
-                gen_suffix = part
-                continue
-            if is_prof_token(token):
-                professional.append(part)
-                continue
-            kept_parts.append(part)
+        tokens = consume_prefix_tokens(part.split())
+        if not tokens:
             continue
-        trailing: List[str] = []
+        trailing_groups: List[List[str]] = []
         while tokens and is_prof_token(tokens[-1]):
-            trailing.append(tokens.pop())
-        if trailing:
-            professional.extend(reversed(trailing))
+            prof_parts = extract_prof_parts(tokens[-1])
+            if not prof_parts:
+                break
+            tokens.pop()
+            trailing_groups.append(prof_parts)
+        if trailing_groups:
+            for group in reversed(trailing_groups):
+                professional.extend(group)
         while tokens and normalize_prof_token(tokens[-1]) in gen_suffixes:
             gen_suffix = tokens.pop()
+        if not tokens:
+            continue
+        if len(tokens) == 1:
+            token = tokens[0]
+            prof_parts = extract_prof_parts(token)
+            if prof_parts:
+                professional.extend(prof_parts)
+                continue
+            if normalize_prof_token(token) in gen_suffixes:
+                gen_suffix = token
+                continue
         if tokens:
             kept_parts.append(" ".join(tokens))
 
     if paren_text:
         maiden_tokens: List[str] = []
         for token in [t.strip() for t in re.split(r"[,/&;]+", paren_text) if t.strip()]:
-            if is_prof_token(token):
-                professional.append(token)
+            prof_parts = extract_prof_parts(token)
+            if prof_parts:
+                professional.extend(prof_parts)
             else:
                 maiden_tokens.append(token)
         if maiden_tokens:
@@ -459,8 +516,10 @@ def strip_suffixes_and_parse_name(
 
     base = " ".join(kept_parts).strip()
     first, middle, last = parse_name_multi_last(base)
-    full_name_clean = " ".join([part for part in (first, middle, last, gen_suffix) if part]).strip()
-    return first, middle, last, gen_suffix, professional, maiden, full_name_clean
+    full_name_clean = " ".join(
+        [part for part in (prefix_value, first, middle, last, gen_suffix) if part]
+    ).strip()
+    return first, middle, last, gen_suffix, professional, maiden, prefix_value, full_name_clean
 
 
 def normalize_email_collection(
@@ -689,13 +748,14 @@ def normalize_contact_record(
 ) -> ContactRecord:
     gen_suffixes = settings.keep_generational_suffixes or set()
     prof_suffixes = settings.professional_suffixes or set()
+    name_prefixes = settings.name_prefixes or set()
 
     tmp_emails: List[Email] = []
     raw_name = strip_emails_from_text_and_capture(
         record.full_name_raw or record.full_name, tmp_emails
     )
-    first, middle, last, gen_suffix, prof, maiden, full_name_clean = strip_suffixes_and_parse_name(
-        raw_name, gen_suffixes, prof_suffixes
+    first, middle, last, gen_suffix, prof, maiden, prefix_value, full_name_clean = (
+        strip_suffixes_and_parse_name(raw_name, gen_suffixes, prof_suffixes, name_prefixes)
     )
 
     if tmp_emails:
@@ -703,6 +763,8 @@ def normalize_contact_record(
         record.emails.extend(
             [email for email in tmp_emails if email.value and email.value not in existing_values]
         )
+
+    record.prefix = record.prefix or prefix_value
 
     if not (first or last):
         primary_email = next(
@@ -714,7 +776,7 @@ def normalize_contact_record(
             first = first or f_guess
             last = last or l_guess
             full_name_clean = " ".join(
-                part for part in [first, middle, last, gen_suffix] if part
+                part for part in [record.prefix, first, middle, last, gen_suffix] if part
             ).strip()
 
     record.first_name = first or record.first_name
@@ -761,7 +823,7 @@ def normalize_contact_record(
 
     record.full_name = " ".join(
         part
-        for part in [record.first_name, record.middle_name, record.last_name, record.suffix]
+        for part in [record.prefix, record.first_name, record.middle_name, record.last_name, record.suffix]
         if part
     ).strip()
 

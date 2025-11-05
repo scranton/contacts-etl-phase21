@@ -20,6 +20,11 @@ normalization:
   - pmp
   - csm
   - spc6
+  - ccim
+  - phr
+  - shrm
+  - shrmcp
+  - cp
   - mba
   - cissp
   - crisc
@@ -38,6 +43,22 @@ normalization:
   - leansixsigma
   - esq
   - jd
+  - ms
+  - rdn
+  - ld
+  - mpa
+  - ise
+  - md
+  - mph
+  name_prefixes:
+  - dr
+  - mr
+  - mrs
+  - ms
+  - miss
+  - prof
+  - sir
+  - madam
 dedupe:
   enable_nickname_equivalence: true
   bucket_by_last_name: true
