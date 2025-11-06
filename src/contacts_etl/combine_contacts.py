@@ -24,6 +24,7 @@ from .common import (
     load_config,
     nickname_equivalent,
     normalize_contact_record,
+    normalize_country_iso2,
     normalize_text_key,
     read_csv_with_optional_header,
     safe_get,
@@ -32,6 +33,7 @@ from .common import (
 from .config_loader import PipelineConfig
 from .logging_utils import configure_logging
 from .models import Address, Phone
+from .normalization import STATE_ABBR
 
 # use module logger instead of configuring logging at import time
 logger = logging.getLogger(__name__)
@@ -100,6 +102,79 @@ DEFAULT_PREFIXES = {
 
 
 PHONE_VALUE_PATTERN = re.compile(r"\+?\d[\d\s()./-]{6,}\d")
+GOOGLE_MULTI_VALUE_SPLIT = re.compile(r":::+")
+POSTAL_CODE_PATTERN = re.compile(r"\b[0-9A-Za-z]{3,10}(?:-[0-9A-Za-z]{3,4})?\b")
+STATE_POSTAL_PATTERN = re.compile(
+    r"^\s*([A-Za-z]{2})[\s,]+(\d{3,10}(?:-[0-9A-Za-z]{3,4})?)\s*$"
+)
+CITY_STATE_POSTAL_PATTERN = re.compile(
+    r"^\s*(.+?)[,\s]+([A-Za-z]{2})[\s,]+(\d{3,10}(?:-[0-9A-Za-z]{3,4})?)\s*$"
+)
+STATE_CODE_SET = set(STATE_ABBR.values())
+STATE_NAME_SET = set(STATE_ABBR.keys())
+COUNTRY_TOKENS = {
+    "united states",
+    "united states of america",
+    "usa",
+    "us",
+    "canada",
+    "mexico",
+    "united kingdom",
+    "uk",
+    "england",
+    "scotland",
+    "wales",
+    "northern ireland",
+}
+STREET_KEYWORDS = {
+    "street",
+    "st",
+    "st.",
+    "road",
+    "rd",
+    "rd.",
+    "avenue",
+    "ave",
+    "ave.",
+    "boulevard",
+    "blvd",
+    "blvd.",
+    "lane",
+    "ln",
+    "ln.",
+    "drive",
+    "dr",
+    "dr.",
+    "court",
+    "ct",
+    "ct.",
+    "circle",
+    "cir",
+    "cir.",
+    "way",
+    "parkway",
+    "pkwy",
+    "pkwy.",
+    "highway",
+    "hwy",
+    "hwy.",
+    "trail",
+    "trl",
+    "trl.",
+    "loop",
+    "plaza",
+    "plz",
+    "suite",
+    "ste",
+    "unit",
+    "apt",
+    "apartment",
+    "floor",
+    "fl",
+    "building",
+    "bldg",
+    "bldg.",
+}
 _GMAIL_LABEL_WARNED: Set[str] = set()
 
 SOURCE_PRIORITY = {
@@ -173,11 +248,13 @@ def _extract_phone_values(raw: str) -> List[str]:
         part = part.strip()
         if not part:
             continue
-        matches = PHONE_VALUE_PATTERN.findall(part)
-        if matches:
-            candidates.extend(match.strip() for match in matches)
-        else:
-            candidates.append(part)
+        segments = _split_google_multi_values(part) or [part]
+        for segment in segments:
+            matches = PHONE_VALUE_PATTERN.findall(segment)
+            if matches:
+                candidates.extend(match.strip() for match in matches)
+            else:
+                candidates.append(segment)
     return [candidate for candidate in candidates if candidate]
 
 
@@ -197,7 +274,10 @@ def _parse_gmail_label(raw_label: str, channel: str) -> Tuple[str, bool]:
         label = label.lstrip("*").strip()
     lowered = label.lower()
     normalized = ""
-    if "work" in lowered:
+    phone_mobile_tokens = {"mobile", "cell", "iphone"}
+    if channel == "phone" and any(token in lowered for token in phone_mobile_tokens):
+        normalized = "mobile"
+    elif "work" in lowered:
         normalized = "work"
     elif "home" in lowered:
         normalized = "home"
@@ -263,6 +343,13 @@ def _extract_type_tokens(params: List[str]) -> List[str]:
     return normalized
 
 
+def _split_google_multi_values(raw: str) -> List[str]:
+    if not raw:
+        return []
+    segments = [segment.strip() for segment in GOOGLE_MULTI_VALUE_SPLIT.split(raw)]
+    return [segment for segment in segments if segment]
+
+
 def _extract_email_values(raw: str) -> List[str]:
     if not raw:
         return []
@@ -271,13 +358,226 @@ def _extract_email_values(raw: str) -> List[str]:
         part = part.strip()
         if not part:
             continue
-        # Emails sometimes embedded in text like "foo@bar ::: baz@qux"
-        subparts = [segment.strip() for segment in re.split(r":::+", part) if segment.strip()]
-        if len(subparts) > 1:
-            candidates.extend(subparts)
-        else:
-            candidates.append(part)
+        subparts = _split_google_multi_values(part) or [part]
+        candidates.extend(subparts)
     return [candidate for candidate in candidates if candidate]
+
+
+def _expand_address_variants(components: Dict[str, str]) -> List[Dict[str, str]]:
+    split_components = {
+        field: _split_google_multi_values(value) for field, value in components.items()
+    }
+    max_len = max((len(values) for values in split_components.values()), default=0)
+    if max_len <= 1:
+        return [
+            {
+                field: (values[0] if values else "")
+                for field, values in split_components.items()
+            }
+        ]
+
+    variants: List[Dict[str, str]] = []
+    for idx in range(max_len):
+        variant: Dict[str, str] = {}
+        for field, values in split_components.items():
+            if values:
+                variant[field] = values[idx] if idx < len(values) else values[-1]
+            else:
+                variant[field] = ""
+        variants.append(variant)
+    return variants
+
+
+def _split_address_lines(value: str) -> List[str]:
+    if not value:
+        return []
+    lines: List[str] = []
+    for chunk in re.split(r"[\r\n]+", value):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        subparts = _split_google_multi_values(chunk) or [chunk]
+        lines.extend(subparts)
+    return lines
+
+
+def _looks_like_country(value: str) -> bool:
+    lowered = (value or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered in COUNTRY_TOKENS:
+        return True
+    country = normalize_country_iso2(lowered)
+    if country and country.lower() != lowered:
+        return True
+    return False
+
+
+def _detect_state_token(value: str) -> str:
+    token = (value or "").strip()
+    if not token:
+        return ""
+    lowered = token.lower()
+    if lowered in STATE_ABBR:
+        return STATE_ABBR[lowered]
+    if len(token) == 2 and token.isalpha():
+        upper = token.upper()
+        if upper in STATE_CODE_SET:
+            return upper
+    return ""
+
+
+def _is_probable_street_line(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered in STATE_NAME_SET or lowered in STATE_CODE_SET or lowered in COUNTRY_TOKENS:
+        return False
+    if CITY_STATE_POSTAL_PATTERN.match(text):
+        return False
+    if "," in text:
+        before, after = text.split(",", 1)
+        if _detect_state_token(after):
+            return False
+    if POSTAL_CODE_PATTERN.fullmatch(text):
+        return False
+    if _looks_like_country(text):
+        return False
+    if any(char.isdigit() for char in text):
+        return True
+    tokens = re.split(r"[\s,]+", lowered)
+    return any(token in STREET_KEYWORDS for token in tokens if token)
+
+
+def _maybe_extract_city_line_details(city_value: str, components: Dict[str, str]) -> None:
+    text = (city_value or "").strip()
+    if not text:
+        return
+    match = CITY_STATE_POSTAL_PATTERN.match(text)
+    if match:
+        city_candidate, state_candidate, postal_candidate = match.groups()
+        if city_candidate:
+            components["city"] = city_candidate.strip()
+        if state_candidate and not components["state"]:
+            state_detected = _detect_state_token(state_candidate)
+            if state_detected:
+                components["state"] = state_detected
+        if postal_candidate and not components["postal_code"]:
+            components["postal_code"] = postal_candidate.strip()
+        return
+    if "," in text and not components["state"]:
+        before, after = text.split(",", 1)
+        state_candidate = _detect_state_token(after)
+        if state_candidate:
+            components["city"] = before.strip() or components["city"]
+            components["state"] = state_candidate
+
+
+def _prepare_gmail_address_components(row: Any, addr_id: str) -> Dict[str, str]:
+    components = {
+        "po_box": safe_get(row, f"Address {addr_id} - PO Box"),
+        "extended": safe_get(row, f"Address {addr_id} - Extended Address"),
+        "street": safe_get(row, f"Address {addr_id} - Street"),
+        "city": safe_get(row, f"Address {addr_id} - City"),
+        "state": safe_get(row, f"Address {addr_id} - Region"),
+        "postal_code": safe_get(row, f"Address {addr_id} - Postal Code"),
+        "country": safe_get(row, f"Address {addr_id} - Country"),
+    }
+    components = {field: (value or "").strip() for field, value in components.items()}
+
+    line_candidates = _split_address_lines(components["street"])
+    redundancies = {
+        components["city"].lower(),
+        components["state"].lower(),
+        components["postal_code"].lower(),
+        components["country"].lower(),
+    }
+    redundancies = {value for value in redundancies if value}
+
+    if line_candidates:
+        should_replace_street = (
+            not components["street"] or "\n" in components["street"] or "\r" in components["street"]
+        )
+        remaining = list(line_candidates)
+        if should_replace_street:
+            street_line = ""
+            street_idx = None
+            for idx, candidate in enumerate(remaining):
+                lowered = candidate.lower()
+                if lowered in redundancies:
+                    continue
+                if _is_probable_street_line(candidate):
+                    street_line = candidate
+                    street_idx = idx
+                    break
+            if street_idx is not None:
+                remaining = remaining[street_idx + 1 :]
+                components["street"] = street_line
+            else:
+                # fall back to the first non-redundant line if we never detected a street
+                while remaining:
+                    candidate = remaining.pop(0)
+                    if candidate.lower() in redundancies:
+                        continue
+                    street_line = candidate
+                    break
+                components["street"] = street_line
+        else:
+            remaining = remaining[1:] if remaining else []
+
+        additional_street_parts: List[str] = []
+        filtered_remaining: List[str] = []
+        for candidate in remaining:
+            lowered = candidate.lower()
+            if lowered in redundancies:
+                continue
+            if _is_probable_street_line(candidate):
+                additional_street_parts.append(candidate)
+            else:
+                filtered_remaining.append(candidate)
+        remaining = filtered_remaining
+
+        if additional_street_parts:
+            parts = [part for part in [components["street"], *additional_street_parts] if part]
+            components["street"] = ", ".join(parts)
+
+        if remaining and not components["city"]:
+            city_line = remaining.pop(0)
+            components["city"] = city_line
+            _maybe_extract_city_line_details(city_line, components)
+
+        for line in remaining:
+            if not line:
+                continue
+            assigned = False
+            match = STATE_POSTAL_PATTERN.match(line)
+            if match:
+                state_candidate, postal_candidate = match.groups()
+                if state_candidate and not components["state"]:
+                    normalized_state = _detect_state_token(state_candidate)
+                    components["state"] = normalized_state or state_candidate.strip()
+                if postal_candidate and not components["postal_code"]:
+                    components["postal_code"] = postal_candidate.strip()
+                assigned = True
+            if not assigned and not components["state"]:
+                normalized_state = _detect_state_token(line)
+                if normalized_state:
+                    components["state"] = normalized_state
+                    assigned = True
+            if not assigned and not components["postal_code"]:
+                postal_match = POSTAL_CODE_PATTERN.search(line)
+                if postal_match:
+                    components["postal_code"] = postal_match.group(0).strip()
+                    assigned = True
+            if not assigned and not components["country"]:
+                normalized_country = normalize_country_iso2(line)
+                if normalized_country:
+                    components["country"] = line.strip()
+                    assigned = True
+            if not assigned and not components["city"]:
+                components["city"] = line.strip()
+    return components
 
 
 def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
@@ -331,29 +631,30 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
         for addr_id in sorted(address_ids, key=lambda value: int(value)):
             addr_label_raw = safe_get(row, f"Address {addr_id} - Label")
             addr_label, addr_pref = _parse_gmail_label(addr_label_raw, "address")
-            address_entry = Address(
-                po_box=safe_get(row, f"Address {addr_id} - PO Box"),
-                extended=safe_get(row, f"Address {addr_id} - Extended Address"),
-                street=safe_get(row, f"Address {addr_id} - Street")
-                or safe_get(row, f"Address {addr_id} - Formatted"),
-                city=safe_get(row, f"Address {addr_id} - City"),
-                state=safe_get(row, f"Address {addr_id} - Region"),
-                postal_code=safe_get(row, f"Address {addr_id} - Postal Code"),
-                country=safe_get(row, f"Address {addr_id} - Country"),
-                label=addr_label,
-            )
-            key_payload = address_entry.to_dict()
-            key_payload.pop("label", None)
-            key = json.dumps(key_payload, sort_keys=True)
-            if any(
-                getattr(address_entry, field)
-                for field in ("street", "city", "state", "postal_code", "country", "po_box")
-            ):
-                existing = address_map.get(key)
-                if existing is None or (not existing.label and address_entry.label):
-                    address_map[key] = address_entry
-                    if addr_pref:
-                        preferred_channels["addresses"].append(address_entry.to_dict())
+            components = _prepare_gmail_address_components(row, addr_id)
+            for variant in _expand_address_variants(components):
+                address_entry = Address(
+                    po_box=variant.get("po_box", ""),
+                    extended=variant.get("extended", ""),
+                    street=variant.get("street", ""),
+                    city=variant.get("city", ""),
+                    state=variant.get("state", ""),
+                    postal_code=variant.get("postal_code", ""),
+                    country=variant.get("country", ""),
+                    label=addr_label,
+                )
+                key_payload = address_entry.to_dict()
+                key_payload.pop("label", None)
+                key = json.dumps(key_payload, sort_keys=True)
+                if any(
+                    getattr(address_entry, field)
+                    for field in ("street", "city", "state", "postal_code", "country", "po_box")
+                ):
+                    existing = address_map.get(key)
+                    if existing is None or (not existing.label and address_entry.label):
+                        address_map[key] = address_entry
+                        if addr_pref:
+                            preferred_channels["addresses"].append(address_entry.to_dict())
         addresses = list(address_map.values())
         first_name = safe_get(row, "First Name")
         middle_name = safe_get(row, "Middle Name")
