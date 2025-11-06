@@ -86,7 +86,8 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         or normalization_cfg.get("keep_generational_suffixes"),
         professional_suffixes=getattr(args, "professional_suffixes", None)
         or normalization_cfg.get("professional_suffixes"),
-        name_prefixes=getattr(args, "name_prefixes", None) or normalization_cfg.get("name_prefixes"),
+        name_prefixes=getattr(args, "name_prefixes", None)
+        or normalization_cfg.get("name_prefixes"),
     )
 
     dedupe = DedupeConfig(

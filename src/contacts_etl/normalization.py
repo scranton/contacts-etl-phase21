@@ -823,7 +823,10 @@ def normalize_contact_record(
 
     record.full_name = " ".join(
         part
-        for part in [record.prefix, record.first_name, record.middle_name, record.last_name, record.suffix]
+        for part in [
+            record.prefix, record.first_name, record.middle_name,
+            record.last_name, record.suffix
+        ]
         if part
     ).strip()
 

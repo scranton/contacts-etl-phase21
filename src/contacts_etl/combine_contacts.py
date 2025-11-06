@@ -7,7 +7,7 @@ import logging
 from collections import defaultdict, OrderedDict
 from dataclasses import replace
 import re
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -100,6 +100,7 @@ DEFAULT_PREFIXES = {
 
 
 PHONE_VALUE_PATTERN = re.compile(r"\+?\d[\d\s()./-]{6,}\d")
+_GMAIL_LABEL_WARNED: Set[str] = set()
 
 SOURCE_PRIORITY = {
     "linkedin": 3,
@@ -188,6 +189,28 @@ def _normalize_phone_label(label: str) -> str:
     return _normalize_label(label)
 
 
+def _parse_gmail_label(raw_label: str, channel: str) -> Tuple[str, bool]:
+    label = (raw_label or "").strip()
+    is_preferred = False
+    if label.startswith("*"):
+        is_preferred = True
+        label = label.lstrip("*").strip()
+    lowered = label.lower()
+    normalized = ""
+    if "work" in lowered:
+        normalized = "work"
+    elif "home" in lowered:
+        normalized = "home"
+    elif "other" in lowered:
+        normalized = "other"
+    elif lowered:
+        normalized = "other"
+        if lowered not in _GMAIL_LABEL_WARNED:
+            logger.info("GMail %s label normalized to other: %s", channel, label)
+            _GMAIL_LABEL_WARNED.add(lowered)
+    return normalized, is_preferred
+
+
 def _record_phone(
     phone_map: "OrderedDict[str, str]", raw_value: str, label: str
 ) -> None:
@@ -266,16 +289,20 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
     records: List[ContactRecord] = []
     for idx, row in df.iterrows():
         email_map: "OrderedDict[str, str]" = OrderedDict()
+        preferred_channels: Dict[str, List[Any]] = {"emails": [], "phones": [], "addresses": []}
         for column in row.index:
             if not str(column).startswith("E-mail ") or not str(column).endswith(" - Value"):
                 continue
             email_value_raw = safe_get(row, column)
             if not email_value_raw:
                 continue
-            label_col = str(column).replace(" - Value", " - Type")
-            email_label = _normalize_label(safe_get(row, label_col))
+            label_col = str(column).replace(" - Value", " - Label")
+            email_label_raw = safe_get(row, label_col)
+            email_label, email_pref = _parse_gmail_label(email_label_raw, "email")
             for extracted in _extract_email_values(email_value_raw):
                 _record_email(email_map, extracted, email_label)
+                if email_pref:
+                    preferred_channels["emails"].append(extracted)
         emails = [Email(value=value, label=label) for value, label in email_map.items()]
 
         phones_map: "OrderedDict[str, str]" = OrderedDict()
@@ -286,9 +313,12 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             if not phone_value_raw:
                 continue
             label_col = str(column).replace(" - Value", " - Label")
-            phone_label = _normalize_phone_label(safe_get(row, label_col))
+            phone_label_raw = safe_get(row, label_col)
+            phone_label, phone_pref = _parse_gmail_label(phone_label_raw, "phone")
             for extracted in _extract_phone_values(phone_value_raw):
                 _record_phone(phones_map, extracted, phone_label)
+                if phone_pref:
+                    preferred_channels["phones"].append(extracted)
 
         phones = [Phone(value=value, label=label) for value, label in phones_map.items()]
 
@@ -299,6 +329,8 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             if match:
                 address_ids.add(match.group(1))
         for addr_id in sorted(address_ids, key=lambda value: int(value)):
+            addr_label_raw = safe_get(row, f"Address {addr_id} - Label")
+            addr_label, addr_pref = _parse_gmail_label(addr_label_raw, "address")
             address_entry = Address(
                 po_box=safe_get(row, f"Address {addr_id} - PO Box"),
                 extended=safe_get(row, f"Address {addr_id} - Extended Address"),
@@ -308,7 +340,7 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
                 state=safe_get(row, f"Address {addr_id} - Region"),
                 postal_code=safe_get(row, f"Address {addr_id} - Postal Code"),
                 country=safe_get(row, f"Address {addr_id} - Country"),
-                label=_normalize_label(safe_get(row, f"Address {addr_id} - Label")),
+                label=addr_label,
             )
             key_payload = address_entry.to_dict()
             key_payload.pop("label", None)
@@ -320,6 +352,8 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
                 existing = address_map.get(key)
                 if existing is None or (not existing.label and address_entry.label):
                     address_map[key] = address_entry
+                    if addr_pref:
+                        preferred_channels["addresses"].append(address_entry.to_dict())
         addresses = list(address_map.values())
         first_name = safe_get(row, "First Name")
         middle_name = safe_get(row, "Middle Name")
@@ -331,6 +365,10 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             for part in [name_prefix, first_name, middle_name, last_name, name_suffix]
             if part
         ).strip()
+        extra_payload: Dict[str, Any] = {}
+        preferred_clean = {k: v for k, v in preferred_channels.items() if v}
+        if preferred_clean:
+            extra_payload["preferred_channels"] = preferred_clean
         record = ContactRecord(
             full_name_raw=raw_full,
             prefix=name_prefix,
@@ -344,6 +382,7 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             phones=phones,
             addresses=addresses,
             notes=safe_get(row, "Notes"),
+            extra=extra_payload,
         )
         records.append(record)
     return records
@@ -534,8 +573,9 @@ def _cluster_indices(
                 def _has_core_name(record: ContactRecord, candidates: List[str]) -> bool:
                     return bool(candidates and record.last_name)
 
-                either_nameless = not _has_core_name(left, left_name_candidates) or not _has_core_name(
-                    right, right_name_candidates
+                either_nameless = (
+                    not _has_core_name(left, left_name_candidates)
+                    or not _has_core_name(right, right_name_candidates)
                 )
                 if either_nameless and not signals.has_corroborator:
                     ok = False
