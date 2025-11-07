@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Tuple
 import pandas as pd
 import yaml  # type: ignore[import-untyped]
 
-from .common import load_config, is_valid_phone_safe, validate_email_safe
+from .common import load_config
 from .logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -18,9 +18,7 @@ def pct(n, d):
     return round((n / d * 100.0), 2) if d else 0.0
 
 
-def validate_email_list(
-    emails_field: object, dns_mx: bool = False
-) -> Tuple[int, int, List[Dict[str, Any]]]:
+def validate_email_list(emails_field: object) -> Tuple[int, int, List[Dict[str, Any]]]:
     details: List[Dict[str, Any]] = []
     if not isinstance(emails_field, str) or not emails_field.strip():
         return 0, 0, details
@@ -29,11 +27,8 @@ def validate_email_list(
     for p in parts:
         email = p.split("::")[0].strip()
         label = p.split("::")[1].strip() if "::" in p else ""
-
-        normalized = validate_email_safe(email, check_deliverability=dns_mx)
-        is_valid = bool(normalized)
-        if is_valid:
-            email = normalized
+        lowered_label = label.lower()
+        is_valid = bool(email) and lowered_label != "invalid"
 
         valid_count += 1 if is_valid else 0
         details.append({"email": email, "label": label, "valid": is_valid})
@@ -44,7 +39,7 @@ def validate_phone_list(phones_field: str) -> Tuple[int, int, List[str]]:
     """
     Validate a pipe-delimited phones field like "value::label|value2::label2".
     Returns (valid_count, total_count, valid_values_list).
-    Uses is_valid_phone_safe for validation.
+    Treats any entry with label 'invalid' as invalid (regardless of value).
     """
     if not phones_field:
         return 0, 0, []
@@ -55,7 +50,8 @@ def validate_phone_list(phones_field: str) -> Tuple[int, int, List[str]]:
 
     for p in parts:
         val = p.split("::", 1)[0].strip()
-        if val and is_valid_phone_safe(val):
+        label = p.split("::", 1)[1].strip() if "::" in p else ""
+        if val and label.lower() != "invalid":
             valid_values.append(val)
 
     return len(valid_values), total, valid_values
@@ -97,11 +93,6 @@ def main():
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--contacts-csv", type=str, default=None)
     parser.add_argument("--out-dir", type=str, default=None)
-    parser.add_argument(
-        "--email-dns-mx",
-        action="store_true",
-        help="Enable DNS/MX deliverability check in email-validator (requires internet).",
-    )
     parser.add_argument("--log-level", type=str, default=None, help="Override logging level")
 
     args = parser.parse_args()
@@ -111,20 +102,17 @@ def main():
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
-    validation_cfg: Dict[str, Any] = cfg.get("validation", {}) or {}
     outputs: Dict[str, Any] = cfg.get("outputs", {}) or {}
 
     contacts_csv = args.contacts_csv or os.path.join(
         outputs.get("dir", os.getcwd()), "consolidated_contacts.csv"
     )
     out_dir = args.out_dir or outputs.get("dir", os.getcwd())
-    dns_mx = args.email_dns_mx or validation_cfg.get("email_dns_mx_check", False)
-
     df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
 
     records: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
-        e_valid, e_total, e_details = validate_email_list(row.get("emails", ""), dns_mx=dns_mx)
+        e_valid, e_total, e_details = validate_email_list(row.get("emails", ""))
         p_valid, p_total, p_details = validate_phone_list(row.get("phones", ""))
         a_valid, a_total, a_details = parse_addresses_json(row.get("addresses_json", ""))
         rec = {

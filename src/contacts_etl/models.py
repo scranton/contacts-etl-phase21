@@ -24,16 +24,18 @@ class Email:
 class Phone:
     value: str
     label: str = ""
+    extension: str = ""
 
     @staticmethod
     def from_mapping(payload: Dict[str, Any]) -> "Phone":
         return Phone(
             value=str(payload.get("value", "") or "").strip(),
             label=str(payload.get("label", "") or "").strip(),
+            extension=str(payload.get("extension", "") or "").strip(),
         )
 
     def to_dict(self) -> Dict[str, str]:
-        return {"value": self.value, "label": self.label}
+        return {"value": self.value, "label": self.label, "extension": self.extension}
 
 
 @dataclass(frozen=True)

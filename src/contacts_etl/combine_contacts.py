@@ -111,6 +111,11 @@ CITY_STATE_POSTAL_PATTERN = re.compile(
     r"^\s*(.+?)[,\s]+([A-Za-z]{2})[\s,]+(\d{3,10}(?:-[0-9A-Za-z]{3,4})?)\s*$"
 )
 STATE_CODE_SET = set(STATE_ABBR.values())
+PHONE_EXTENSION_PATTERN = re.compile(r"^(?:ext\.?|extension|x)?\s*(\d{1,6})$", re.IGNORECASE)
+PHONE_INLINE_EXTENSION_PATTERN = re.compile(
+    r"^(?P<number>.+?)(?:[\s,;/]*(?:ext\.?|extension|x)\s*(?P<ext>\d{1,6}))\s*$",
+    re.IGNORECASE,
+)
 STATE_NAME_SET = set(STATE_ABBR.keys())
 COUNTRY_TOKENS = {
     "united states",
@@ -209,7 +214,13 @@ def _build_normalization_settings(config: PipelineConfig) -> NormalizationSettin
     prof_suffixes = config.normalization.professional_suffixes or list(DEFAULT_PROF)
     name_prefixes = config.normalization.name_prefixes or list(DEFAULT_PREFIXES)
     return NormalizationSettings.from_args(
-        keep_suffixes, prof_suffixes, name_prefixes, config.normalization.default_phone_country
+        keep_suffixes,
+        prof_suffixes,
+        name_prefixes,
+        config.normalization.default_phone_country,
+        config.normalization.drop_invalid_emails,
+        config.normalization.drop_invalid_phones,
+        config.normalization.email_dns_mx_check,
     )
 
 
@@ -240,22 +251,28 @@ def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
     return records
 
 
-def _extract_phone_values(raw: str) -> List[str]:
+def _extract_phone_values(raw: str) -> List[Tuple[str, str]]:
     if not raw:
         return []
-    candidates: List[str] = []
+    candidates: List[Tuple[str, str]] = []
     for part in re.split(r"[\r\n|;]+", raw):
         part = part.strip()
         if not part:
             continue
         segments = _split_google_multi_values(part) or [part]
         for segment in segments:
-            matches = PHONE_VALUE_PATTERN.findall(segment)
+            base_segment, inline_ext = _strip_phone_extension(segment)
+            matches = PHONE_VALUE_PATTERN.findall(base_segment)
             if matches:
-                candidates.extend(match.strip() for match in matches)
+                for idx, match in enumerate(matches):
+                    ext = inline_ext if inline_ext and idx == len(matches) - 1 else ""
+                    candidates.append((match.strip(), ext))
             else:
-                candidates.append(segment)
-    return [candidate for candidate in candidates if candidate]
+                stripped = base_segment.strip()
+                if stripped:
+                    candidates.append((stripped, inline_ext))
+    cleaned = [candidate for candidate in candidates if candidate[0]]
+    return _merge_phone_extensions(cleaned)
 
 
 def _normalize_label(label: str) -> str:
@@ -292,15 +309,20 @@ def _parse_gmail_label(raw_label: str, channel: str) -> Tuple[str, bool]:
 
 
 def _record_phone(
-    phone_map: "OrderedDict[str, str]", raw_value: str, label: str
+    phone_map: "OrderedDict[Tuple[str, str], str]",
+    raw_value: str,
+    label: str,
+    extension: str = "",
 ) -> None:
     value = (raw_value or "").strip()
+    ext = (extension or "").strip()
     if not value:
         return
     label_norm = _normalize_phone_label(label)
-    current = phone_map.get(value)
+    key = (value, ext)
+    current = phone_map.get(key)
     if current is None or (not current and label_norm):
-        phone_map[value] = label_norm
+        phone_map[key] = label_norm
 
 
 def _record_email(
@@ -348,6 +370,39 @@ def _split_google_multi_values(raw: str) -> List[str]:
         return []
     segments = [segment.strip() for segment in GOOGLE_MULTI_VALUE_SPLIT.split(raw)]
     return [segment for segment in segments if segment]
+
+
+def _strip_phone_extension(segment: str) -> Tuple[str, str]:
+    match = PHONE_INLINE_EXTENSION_PATTERN.match(segment)
+    if match and match.group("ext"):
+        number = (match.group("number") or "").strip(" ,;/")
+        extension = match.group("ext").strip()
+        if number:
+            return number, extension
+    return segment, ""
+
+
+def _merge_phone_extensions(values: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    merged: List[Tuple[str, str]] = []
+    for value, extension in values:
+        stripped_value = (value or "").strip()
+        extension = (extension or "").strip()
+        if not stripped_value:
+            if extension and merged and not merged[-1][1]:
+                prev_value, _ = merged[-1]
+                merged[-1] = (prev_value, extension)
+            continue
+        match = PHONE_EXTENSION_PATTERN.match(stripped_value)
+        if not extension and match and merged and not merged[-1][1]:
+            prev_value, _ = merged[-1]
+            merged[-1] = (prev_value, match.group(1))
+            continue
+        merged.append((stripped_value, extension))
+    return merged
+
+
+def _format_phone_with_extension(value: str, extension: str) -> str:
+    return f"{value}x{extension}" if extension else value
 
 
 def _extract_email_values(raw: str) -> List[str]:
@@ -605,7 +660,7 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
                     preferred_channels["emails"].append(extracted)
         emails = [Email(value=value, label=label) for value, label in email_map.items()]
 
-        phones_map: "OrderedDict[str, str]" = OrderedDict()
+        phones_map: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
         for column in row.index:
             if not str(column).startswith("Phone ") or not str(column).endswith(" - Value"):
                 continue
@@ -615,12 +670,15 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             label_col = str(column).replace(" - Value", " - Label")
             phone_label_raw = safe_get(row, label_col)
             phone_label, phone_pref = _parse_gmail_label(phone_label_raw, "phone")
-            for extracted in _extract_phone_values(phone_value_raw):
-                _record_phone(phones_map, extracted, phone_label)
+            for extracted_value, phone_extension in _extract_phone_values(phone_value_raw):
+                _record_phone(phones_map, extracted_value, phone_label, phone_extension)
                 if phone_pref:
-                    preferred_channels["phones"].append(extracted)
+                    preferred_channels["phones"].append(extracted_value)
 
-        phones = [Phone(value=value, label=label) for value, label in phones_map.items()]
+        phones = [
+            Phone(value=value, extension=extension, label=label)
+            for (value, extension), label in phones_map.items()
+        ]
 
         address_map: "OrderedDict[str, Address]" = OrderedDict()
         address_ids: Set[str] = set()
@@ -701,7 +759,7 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
     for idx, block in enumerate(blocks):
         b = f"{block}END:VCARD"
         record = ContactRecord(source="mac_vcf", source_row_id=str(idx))
-        phone_map: "OrderedDict[str, str]" = OrderedDict()
+        phone_map: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
         address_map: "OrderedDict[str, Address]" = OrderedDict()
         email_map: "OrderedDict[str, str]" = OrderedDict()
         for line in b.splitlines():
@@ -769,7 +827,8 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                         break
                 if not label and tokens:
                     label = tokens[0]
-                _record_phone(phone_map, value, label)
+                base_value, inline_ext = _strip_phone_extension(value.strip())
+                _record_phone(phone_map, base_value, label, inline_ext)
             elif line.startswith("ADR"):
                 parts = line.split(":", 1)[1].split(";")
                 address = Address(
@@ -796,7 +855,10 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
             elif line.startswith("NOTE:"):
                 record.notes = line[5:].strip()
         record.emails = [Email(value=value, label=label) for value, label in email_map.items()]
-        record.phones = [Phone(value=value, label=label) for value, label in phone_map.items()]
+        record.phones = [
+            Phone(value=value, extension=extension, label=label)
+            for (value, extension), label in phone_map.items()
+        ]
         record.addresses = list(address_map.values())
         records.append(record)
     return records
@@ -969,7 +1031,7 @@ def _merge_cluster(
     linkedin = _choose_by_priority(cluster_records, lambda r: r.linkedin_url)
 
     all_emails: Dict[str, str] = {}
-    all_phones: Dict[str, str] = {}
+    all_phones: Dict[Tuple[str, str], str] = {}
     cluster_invalid_emails: Set[str] = set()
     cluster_non_standard_phones: Set[str] = set()
     all_addresses: List[Dict[str, str]] = []
@@ -985,21 +1047,25 @@ def _merge_cluster(
             if not normalized_value:
                 continue
             if not is_confident:
-                rendered = f"{normalized_value}::{phone.label}" if phone.label else normalized_value
+                rendered_value = _format_phone_with_extension(
+                    normalized_value, phone.extension
+                )
+                rendered = f"{rendered_value}::{phone.label}" if phone.label else rendered_value
                 cluster_non_standard_phones.add(rendered)
                 continue
-            existing_label = all_phones.get(normalized_value)
+            key = (normalized_value, phone.extension or "")
+            existing_label = all_phones.get(key)
             if existing_label:
                 # Prefer non-empty labels or keep an existing confident label
                 if phone.label and not existing_label:
-                    all_phones[normalized_value] = phone.label
+                    all_phones[key] = phone.label
             else:
-                all_phones[normalized_value] = phone.label
+                all_phones[key] = phone.label
         for address in record.addresses:
             as_dict = address.to_dict()
-            key = json.dumps(as_dict, sort_keys=True)
-            if key not in seen_addr_keys:
-                seen_addr_keys.add(key)
+            addr_key = json.dumps(as_dict, sort_keys=True)
+            if addr_key not in seen_addr_keys:
+                seen_addr_keys.add(addr_key)
                 all_addresses.append(as_dict)
 
     deduped_addresses_json = json.dumps(all_addresses, ensure_ascii=False)
@@ -1011,13 +1077,16 @@ def _merge_cluster(
         if record.source and record.source_row_id
     ]
 
+    phone_key_components = [
+        _format_phone_with_extension(value, extension) for value, extension in all_phones.keys()
+    ]
     key_material = "::".join(
         [
             full_name_clean,
             company,
             title,
             ";".join(sorted(all_emails.keys())),
-            ";".join(sorted(all_phones.keys())),
+            ";".join(sorted(phone_key_components)),
             "|".join(sorted(lineage_keys)),
         ]
     ).strip()
@@ -1038,7 +1107,10 @@ def _merge_cluster(
         title=title,
         linkedin_url=linkedin,
         emails=[Email(value=value, label=all_emails[value]) for value in sorted(all_emails.keys())],
-        phones=[Phone(value=value, label=all_phones[value]) for value in sorted(all_phones.keys())],
+        phones=[
+            Phone(value=value, extension=extension, label=all_phones[(value, extension)])
+            for value, extension in sorted(all_phones.keys())
+        ],
         addresses=[],
     )
     merged.addresses = [Address.from_mapping(address) for address in all_addresses]
@@ -1058,12 +1130,18 @@ def _merge_cluster(
                 source_company=record.company,
                 source_title=record.title,
                 source_emails="|".join(email.value for email in record.emails),
-                source_phones="|".join(phone.value for phone in record.phones),
+                source_phones="|".join(
+                    _format_phone_with_extension(phone.value, phone.extension)
+                    for phone in record.phones
+                ),
                 source_addresses_json=json.dumps(
                     [address.to_dict() for address in record.addresses], ensure_ascii=False
                 ),
                 source_emails_raw="|".join(email.value for email in raw_record.emails),
-                source_phones_raw="|".join(phone.value for phone in raw_record.phones),
+                source_phones_raw="|".join(
+                    _format_phone_with_extension(phone.value, phone.extension)
+                    for phone in raw_record.phones
+                ),
                 invalid_emails="|".join(record_extra.get("invalid_emails", [])),
                 non_standard_phones="|".join(record_extra.get("non_standard_phones", [])),
             )
@@ -1076,7 +1154,7 @@ def _merge_cluster(
     if cluster_invalid_emails:
         merged.extra["invalid_emails"] = sorted(cluster_invalid_emails)
         logger.info(
-            "Contact %s dropped %d invalid email(s): %s",
+            "Contact %s encountered %d invalid email(s): %s",
             contact_id,
             len(cluster_invalid_emails),
             ", ".join(list(cluster_invalid_emails)[:5]),
@@ -1136,7 +1214,10 @@ def build(
                 "title": record.title,
                 "linkedin_url": record.linkedin_url,
                 "emails": "|".join(f"{email.value}::{email.label}" for email in record.emails),
-                "phones": "|".join(f"{phone.value}::{phone.label}" for phone in record.phones),
+                "phones": "|".join(
+                    f"{_format_phone_with_extension(phone.value, phone.extension)}::{phone.label}"
+                    for phone in record.phones
+                ),
                 "addresses_json": extra.get("addresses_json", "[]"),
                 "invalid_emails": "|".join(sorted(set(extra.get("invalid_emails", [])))),
                 "non_standard_phones": "|".join(sorted(set(extra.get("non_standard_phones", [])))),

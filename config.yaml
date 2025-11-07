@@ -6,6 +6,9 @@ outputs:
   dir: ./output
 normalization:
   default_phone_country: US
+  drop_invalid_emails: false
+  drop_invalid_phones: false
+  email_dns_mx_check: false
   keep_generational_suffixes:
   - jr
   - sr
@@ -66,11 +69,6 @@ dedupe:
   merge_score_threshold: 1.2
   relaxed_merge_threshold: 0.6
   require_corroborator: false
-validation:
-  email_syntax_check: true
-  email_dns_mx_check: true
-  phone_strict_validation: true
-  address_us_parse: false
 quality:
   email_full_score: 40
   email_partial_score: 20

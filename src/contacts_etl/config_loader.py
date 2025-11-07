@@ -20,6 +20,9 @@ class NormalizationConfig:
     keep_generational_suffixes: Optional[list[str]] = None
     professional_suffixes: Optional[list[str]] = None
     name_prefixes: Optional[list[str]] = None
+    drop_invalid_emails: bool = False
+    drop_invalid_phones: bool = False
+    email_dns_mx_check: bool = False
 
 
 @dataclass
@@ -88,6 +91,9 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         or normalization_cfg.get("professional_suffixes"),
         name_prefixes=getattr(args, "name_prefixes", None)
         or normalization_cfg.get("name_prefixes"),
+        drop_invalid_emails=normalization_cfg.get("drop_invalid_emails", False),
+        drop_invalid_phones=normalization_cfg.get("drop_invalid_phones", False),
+        email_dns_mx_check=normalization_cfg.get("email_dns_mx_check", False),
     )
 
     dedupe = DedupeConfig(
@@ -107,8 +113,7 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
     )
 
     validation = ValidationConfig(
-        email_dns_mx_check=getattr(args, "email_dns_mx", None)
-        or validation_cfg.get("email_dns_mx_check", False),
+        email_dns_mx_check=validation_cfg.get("email_dns_mx_check", False),
     )
 
     tagging = TaggingConfig(

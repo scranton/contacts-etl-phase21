@@ -212,6 +212,9 @@ class NormalizationSettings:
     professional_suffixes: Set[str] = field(default_factory=set)
     name_prefixes: Set[str] = field(default_factory=set)
     default_phone_country: str = "US"
+    drop_invalid_emails: bool = False
+    drop_invalid_phones: bool = False
+    email_dns_mx_check: bool = False
 
     @classmethod
     def from_args(
@@ -220,12 +223,18 @@ class NormalizationSettings:
         professional_suffixes: Optional[Iterable[str]],
         name_prefixes: Optional[Iterable[str]],
         default_phone_country: str = "US",
+        drop_invalid_emails: bool = False,
+        drop_invalid_phones: bool = False,
+        email_dns_mx_check: bool = False,
     ) -> "NormalizationSettings":
         return cls(
             keep_generational_suffixes=set(s.lower() for s in (keep_generational_suffixes or [])),
             professional_suffixes=set(s.lower() for s in (professional_suffixes or [])),
             name_prefixes=set(s.lower() for s in (name_prefixes or [])),
             default_phone_country=default_phone_country or "US",
+            drop_invalid_emails=drop_invalid_emails,
+            drop_invalid_phones=drop_invalid_phones,
+            email_dns_mx_check=email_dns_mx_check,
         )
 
 
@@ -312,6 +321,11 @@ def format_phone_e164_safe(value: str, default_country: str = "US") -> str:
     if not formatted:
         formatted = s
     return formatted
+
+
+def _format_phone_with_extension(value: str, extension: str) -> str:
+    extension = (extension or "").strip()
+    return f"{value}x{extension}" if extension else value
 
 
 def read_csv_with_optional_header(
@@ -523,33 +537,46 @@ def strip_suffixes_and_parse_name(
 
 
 def normalize_email_collection(
-    values: Sequence[Email], check_deliverability: bool = False
+    values: Sequence[Email],
+    check_deliverability: bool = False,
+    drop_invalid: bool = False,
 ) -> Tuple[List[Email], List[str]]:
     email_map: "OrderedDict[str, str]" = OrderedDict()
     invalid: List[str] = []
+    kept_invalid: "OrderedDict[str, str]" = OrderedDict()
     for entry in values:
         normalized_value = validate_email_safe(
             entry.value, check_deliverability=check_deliverability
         )
         if not normalized_value:
-            if entry.value:
-                invalid.append(entry.value.strip())
+            raw_value = (entry.value or "").strip()
+            if not raw_value:
+                continue
+            invalid.append(raw_value)
+            if drop_invalid:
+                continue
+            key = raw_value.lower()
+            if key not in kept_invalid:
+                kept_invalid[key] = raw_value
             continue
         candidate_label = _normalize_label_generic(getattr(entry, "label", ""))
         current_label = email_map.get(normalized_value)
         if current_label is None or (not current_label and candidate_label):
             email_map[normalized_value] = candidate_label
     out: List[Email] = [Email(value=value, label=label) for value, label in email_map.items()]
+    if not drop_invalid:
+        out.extend(Email(value=value, label="invalid") for value in kept_invalid.values())
     return out, invalid
 
 
 def normalize_phone_collection(
-    values: Sequence[Phone], default_country: str
+    values: Sequence[Phone], default_country: str, drop_invalid: bool = False
 ) -> Tuple[List[Phone], List[str]]:
     out: List[Phone] = []
-    seen: Set[str] = set()
+    seen: Set[Tuple[str, str]] = set()
     non_standard: List[str] = []
     non_standard_seen: Set[str] = set()
+    kept_invalid: List[Tuple[str, str]] = []
     for entry in values:
         raw_value = entry.value or ""
         formatted = format_phone_e164_safe(raw_value, default_country=default_country)
@@ -564,19 +591,28 @@ def normalize_phone_collection(
                     is_confident = True
 
         if is_confident and formatted:
-            if formatted in seen:
+            key = (formatted, entry.extension or "")
+            if key in seen:
                 continue
-            seen.add(formatted)
-            out.append(Phone(value=formatted, label=entry.label))
+            seen.add(key)
+            out.append(Phone(value=formatted, label=entry.label, extension=entry.extension))
         else:
             trimmed = raw_value.strip()
             if not trimmed:
                 continue
-            rendered = f"{trimmed}::{entry.label}" if entry.label else trimmed
+            rendered_value = _format_phone_with_extension(trimmed, entry.extension)
+            rendered = f"{rendered_value}::invalid"
             if rendered in non_standard_seen:
                 continue
             non_standard_seen.add(rendered)
             non_standard.append(rendered)
+            if not drop_invalid:
+                kept_invalid.append((trimmed, entry.extension))
+    if not drop_invalid:
+        out.extend(
+            Phone(value=value, extension=extension, label="invalid")
+            for value, extension in kept_invalid
+        )
     return out, non_standard
 
 
@@ -833,11 +869,17 @@ def normalize_contact_record(
     if record.extra is None:
         record.extra = {}
 
-    record.emails, invalid_emails = normalize_email_collection(record.emails)
+    record.emails, invalid_emails = normalize_email_collection(
+        record.emails,
+        check_deliverability=settings.email_dns_mx_check,
+        drop_invalid=settings.drop_invalid_emails,
+    )
     if invalid_emails:
+        action = "Dropped" if settings.drop_invalid_emails else "Retained (labeled invalid)"
         record.extra.setdefault("invalid_emails", []).extend(invalid_emails)
         logger.info(
-            "Dropped %d invalid email(s) for %s:%s -> %s",
+            "%s %d invalid email(s) for %s:%s -> %s",
+            action,
             len(invalid_emails),
             record.source or "unknown",
             record.source_row_id or "unknown",
@@ -845,13 +887,17 @@ def normalize_contact_record(
         )
 
     normalized_phones, non_standard_phones = normalize_phone_collection(
-        record.phones, settings.default_phone_country
+        record.phones,
+        settings.default_phone_country,
+        drop_invalid=settings.drop_invalid_phones,
     )
     record.phones = normalized_phones
     if non_standard_phones:
+        action = "Dropped" if settings.drop_invalid_phones else "Retained (labeled invalid)"
         record.extra.setdefault("non_standard_phones", []).extend(non_standard_phones)
         logger.info(
-            "Flagged %d non-standard phone(s) for %s:%s -> %s",
+            "%s %d non-standard phone(s) for %s:%s -> %s",
+            action,
             len(non_standard_phones),
             record.source or "unknown",
             record.source_row_id or "unknown",
