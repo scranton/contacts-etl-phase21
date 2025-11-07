@@ -237,7 +237,7 @@ def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
         if "linkedin.com" not in linkedin_url.lower():
             linkedin_url = ""
         primary_email = safe_get(row, "Email Address")
-        emails = [Email(value=primary_email, label="work")] if primary_email else []
+        emails = [Email(value=primary_email, label="home")] if primary_email else []
         full_name_raw = " ".join([safe_get(row, "First Name"), safe_get(row, "Last Name")]).strip()
         record = ContactRecord(
             full_name_raw=full_name_raw,
@@ -427,6 +427,25 @@ def _merge_phone_extensions(values: List[Tuple[str, str]]) -> List[Tuple[str, st
 
 def _format_phone_with_extension(value: str, extension: str) -> str:
     return f"{value}x{extension}" if extension else value
+
+
+def _format_address_display(address: Address) -> str:
+    parts = [
+        address.street,
+        address.city,
+        address.state,
+        address.postal_code,
+        address.country,
+    ]
+    return ", ".join(part for part in parts if part)
+
+
+def _first_labeled_item(items: List[Any], label: str) -> Optional[Any]:
+    for item in items:
+        item_label = getattr(item, "label", "")
+        if item_label == label:
+            return item
+    return None
 
 
 def _extract_email_values(raw: str) -> List[str]:
@@ -1202,7 +1221,7 @@ def _merge_cluster(
 
 def build(
     args: argparse.Namespace, config: Optional[PipelineConfig] = None
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     config = config or load_config(args)
     normalization_settings = _build_normalization_settings(config)
 
@@ -1225,6 +1244,8 @@ def build(
         lineage_records.extend(lineage)
 
     contacts_rows = []
+    flattened_rows: List[Dict[str, str]] = []
+    label_targets = ["home", "work", "other"]
     for record in merged_contacts:
         extra = record.extra or {}
         contacts_rows.append(
@@ -1252,6 +1273,32 @@ def build(
                 "source_row_count": extra.get("source_row_count", extra.get("source_count", 1)),
             }
         )
+        flattened_row: Dict[str, str] = {
+            "contact_id": record.contact_id,
+            "full_name": record.full_name,
+            "company": record.company,
+            "title": record.title,
+            "linkedin_url": record.linkedin_url,
+        }
+        valid_emails = [
+            email for email in record.emails if email.label and email.label != "invalid"
+        ]
+        valid_phones = [
+            phone for phone in record.phones if phone.label and phone.label != "invalid"
+        ]
+        valid_addresses = [address for address in record.addresses if address.label]
+        for label in label_targets:
+            email = _first_labeled_item(valid_emails, label)
+            flattened_row[f"{label}_email"] = email.value if email else ""
+            phone = _first_labeled_item(valid_phones, label)
+            flattened_row[f"{label}_phone"] = (
+                _format_phone_with_extension(phone.value, phone.extension) if phone else ""
+            )
+            address = _first_labeled_item(valid_addresses, label)
+            flattened_row[f"{label}_address"] = (
+                _format_address_display(address) if address else ""
+            )
+        flattened_rows.append(flattened_row)
 
     lineage_rows = [entry.to_dict() for entry in lineage_records]
 
@@ -1265,7 +1312,8 @@ def build(
             )
 
     lineage_df = pd.DataFrame(lineage_rows)
-    return contacts_df, lineage_df
+    flattened_df = pd.DataFrame(flattened_rows)
+    return contacts_df, lineage_df, flattened_df
 
 
 def main() -> int:
@@ -1296,16 +1344,19 @@ def main() -> int:
 
     config = load_config(args)
     configure_logging(config, level_override=args.log_level)
-    contacts_df, lineage_df = build(args, config=config)
+    contacts_df, lineage_df, flattened_df = build(args, config=config)
 
     out_dir = config.outputs.dir
     contacts_path = out_dir / "consolidated_contacts.csv"
     lineage_path = out_dir / "consolidated_lineage.csv"
+    flattened_path = out_dir / "flattened_contacts.csv"
     contacts_df.to_csv(str(contacts_path), index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)
     lineage_df.to_csv(str(lineage_path), index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)
+    flattened_df.to_csv(str(flattened_path), index=False, encoding="utf-8", quoting=csv.QUOTE_ALL)
 
     logger.info("Saved: %s", contacts_path)
     logger.info("Saved: %s", lineage_path)
+    logger.info("Saved: %s", flattened_path)
 
     return 0
 
