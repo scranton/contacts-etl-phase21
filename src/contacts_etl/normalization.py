@@ -542,16 +542,13 @@ def strip_suffixes_and_parse_name(
 
 def normalize_email_collection(
     values: Sequence[Email],
-    check_deliverability: bool = False,
     drop_invalid: bool = False,
 ) -> Tuple[List[Email], List[str]]:
     email_map: "OrderedDict[str, str]" = OrderedDict()
     invalid: List[str] = []
     kept_invalid: "OrderedDict[str, str]" = OrderedDict()
     for entry in values:
-        normalized_value = validate_email_safe(
-            entry.value, check_deliverability=check_deliverability
-        )
+        normalized_value = validate_email_safe(entry.value, check_deliverability=False)
         if not normalized_value:
             raw_value = (entry.value or "").strip()
             if not raw_value:
@@ -875,7 +872,6 @@ def normalize_contact_record(
 
     record.emails, invalid_emails = normalize_email_collection(
         record.emails,
-        check_deliverability=settings.email_dns_mx_check,
         drop_invalid=settings.drop_invalid_emails,
     )
     if invalid_emails:

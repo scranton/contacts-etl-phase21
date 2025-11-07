@@ -26,6 +26,7 @@ from .common import (
     normalize_contact_record,
     normalize_country_iso2,
     normalize_text_key,
+    validate_email_safe,
     read_csv_with_optional_header,
     safe_get,
     warn_missing,
@@ -446,6 +447,43 @@ def _first_labeled_item(items: List[Any], label: str) -> Optional[Any]:
         if item_label == label:
             return item
     return None
+
+
+def _apply_post_merge_email_mx_check(
+    contacts: List[ContactRecord], enable_check: bool
+) -> None:
+    if not enable_check:
+        return
+    for record in contacts:
+        updated: "OrderedDict[str, Email]" = OrderedDict()
+        invalid_values: List[str] = []
+        for email in record.emails:
+            value = email.value
+            label = email.label or ""
+            if label == "invalid":
+                key = value.lower()
+                updated.setdefault(key, email)
+                invalid_values.append(value)
+                continue
+            normalized = validate_email_safe(value, check_deliverability=True)
+            if normalized:
+                new_email = Email(value=normalized, label=label)
+                key = normalized.lower()
+            else:
+                new_email = Email(value=value, label="invalid")
+                key = value.lower()
+                invalid_values.append(value)
+            if key in updated and updated[key].label == "invalid" and new_email.label != "invalid":
+                updated[key] = new_email
+            elif key not in updated:
+                updated[key] = new_email
+        record.emails = list(updated.values())
+        if invalid_values:
+            logger.info(
+                "Contact %s post-merge MX invalid email(s): %s",
+                record.contact_id or record.full_name or "unknown",
+                ", ".join(sorted(set(invalid_values))[:5]),
+            )
 
 
 def _extract_email_values(raw: str) -> List[str]:
@@ -1242,6 +1280,10 @@ def build(
         )
         merged_contacts.append(merged)
         lineage_records.extend(lineage)
+
+    _apply_post_merge_email_mx_check(
+        merged_contacts, normalization_settings.email_dns_mx_check
+    )
 
     contacts_rows = []
     flattened_rows: List[Dict[str, str]] = []
