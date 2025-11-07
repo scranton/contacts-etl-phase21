@@ -735,8 +735,9 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             label_col = str(column).replace(" - Value", " - Label")
             email_label_raw = safe_get(row, label_col)
             email_label, email_pref = _parse_gmail_label(email_label_raw, "email")
+            label = email_label or "other"
             for extracted in _extract_email_values(email_value_raw):
-                _record_email(email_map, extracted, email_label)
+                _record_email(email_map, extracted, label)
                 if email_pref:
                     preferred_channels["emails"].append(extracted)
         emails = [Email(value=value, label=label) for value, label in email_map.items()]
@@ -751,8 +752,9 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             label_col = str(column).replace(" - Value", " - Label")
             phone_label_raw = safe_get(row, label_col)
             phone_label, phone_pref = _parse_gmail_label(phone_label_raw, "phone")
+            label = phone_label or "other"
             for extracted_value, phone_extension in _extract_phone_values(phone_value_raw):
-                _record_phone(phones_map, extracted_value, phone_label, phone_extension)
+                _record_phone(phones_map, extracted_value, label, phone_extension)
                 if phone_pref:
                     preferred_channels["phones"].append(extracted_value)
 
@@ -770,6 +772,7 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
         for addr_id in sorted(address_ids, key=lambda value: int(value)):
             addr_label_raw = safe_get(row, f"Address {addr_id} - Label")
             addr_label, addr_pref = _parse_gmail_label(addr_label_raw, "address")
+            addr_label = addr_label or "other"
             components = _prepare_gmail_address_components(row, addr_id)
             for variant in _expand_address_variants(components):
                 address_entry = Address(
@@ -887,6 +890,8 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                         break
                 if not label and email_tokens:
                     label = email_tokens[0]
+                if not label:
+                    label = "other"
                 _record_email(email_map, value, label)
             elif line.upper().startswith("TEL") and ":" in line:
                 params_part, value = line.split(":", 1)
@@ -912,6 +917,8 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                         break
                 if not label and tokens:
                     label = tokens[0]
+                if not label:
+                    label = "other"
                 base_value, inline_ext = _strip_phone_extension(value.strip())
                 _record_phone(phone_map, base_value, label, inline_ext)
             elif line.startswith("ADR"):
