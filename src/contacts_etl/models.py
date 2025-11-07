@@ -90,6 +90,7 @@ class ContactRecord:
     nickname: str = ""
     company: str = ""
     title: str = ""
+    department: str = ""
     linkedin_url: str = ""
     source: str = ""
     source_row_id: str = ""
@@ -133,6 +134,7 @@ class ContactRecord:
             nickname=str(payload.get("nickname", "") or "").strip(),
             company=str(payload.get("company", "") or "").strip(),
             title=str(payload.get("title", "") or "").strip(),
+            department=str(payload.get("department", "") or "").strip(),
             linkedin_url=str(payload.get("linkedin_url", "") or "").strip(),
             source=str(payload.get("source", "") or "").strip(),
             source_row_id=str(payload.get("source_row_id", "") or "").strip(),
@@ -158,6 +160,7 @@ class ContactRecord:
             "nickname": self.nickname,
             "company": self.company,
             "title": self.title,
+            "department": self.department,
             "linkedin_url": self.linkedin_url,
             "source": self.source,
             "source_row_id": self.source_row_id,

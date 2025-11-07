@@ -378,11 +378,11 @@ def _unescape_vcard_value(value: str) -> str:
     if not value:
         return ""
     replacements = {
-        r"\\;": ";",
-        r"\\,": ",",
-        r"\\n": "\n",
-        r"\\N": "\n",
-        r"\\\\": "\\",
+        r"\;": ";",
+        r"\,": ",",
+        r"\n": "\n",
+        r"\N": "\n",
+        r"\\": "\\",
     }
     for old, new in replacements.items():
         value = value.replace(old, new)
@@ -819,6 +819,7 @@ def _load_gmail_csv(path: Optional[str]) -> List[ContactRecord]:
             nickname=safe_get(row, "Nickname"),
             company=safe_get(row, "Organization Name"),
             title=safe_get(row, "Organization Title"),
+            department=safe_get(row, "Organization Department"),
             source="gmail",
             source_row_id=str(idx),
             emails=emails,
@@ -941,9 +942,15 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                 if existing is None or (not existing.label and address.label):
                     address_map[key] = address
             elif line.startswith("ORG:"):
-                record.company = line[4:].strip()
+                value = _unescape_vcard_value(line[4:].strip())
+                components = value.split(";") if value else []
+                company = components[0].strip() if components else ""
+                department_parts = [part.strip() for part in components[1:] if part.strip()]
+                record.company = company
+                if department_parts:
+                    record.department = ", ".join(department_parts)
             elif line.startswith("TITLE:"):
-                record.title = line[6:].strip()
+                record.title = _unescape_vcard_value(line[6:].strip())
             elif line.startswith("URL:") and "linkedin.com" in line.lower():
                 record.linkedin_url = line[4:].strip()
             elif line.startswith("NOTE:"):
@@ -1122,6 +1129,7 @@ def _merge_cluster(
     nickname_value = _choose_by_priority(cluster_records, lambda r: r.nickname)
     company = _choose_by_priority(cluster_records, lambda r: r.company)
     title = _choose_by_priority(cluster_records, lambda r: r.title)
+    department = _choose_by_priority(cluster_records, lambda r: r.department)
     linkedin = _choose_by_priority(cluster_records, lambda r: r.linkedin_url)
 
     all_emails: Dict[str, str] = {}
@@ -1202,6 +1210,7 @@ def _merge_cluster(
         nickname=nickname_value,
         company=company,
         title=title,
+        department=department,
         linkedin_url=linkedin,
         emails=[Email(value=value, label=all_emails[value]) for value in sorted(all_emails.keys())],
         phones=[
@@ -1311,6 +1320,7 @@ def build(
                 "nickname": record.nickname,
                 "company": record.company,
                 "title": record.title,
+                "department": record.department,
                 "linkedin_url": record.linkedin_url,
                 "emails": "|".join(f"{email.value}::{email.label}" for email in record.emails),
                 "phones": "|".join(
@@ -1326,6 +1336,7 @@ def build(
             "contact_id": record.contact_id,
             "full_name": record.full_name,
             "company": record.company,
+            "department": record.department,
             "title": record.title,
             "linkedin_url": record.linkedin_url,
         }
