@@ -302,7 +302,11 @@ def format_phone_e164_safe(value: str, default_country: str = "US") -> str:
     if HAS_PHONENUMBERS:
         try:
             region = None if s.startswith("+") else default_country
-            parsed = phonenumbers.parse(s, region)  # type: ignore[arg-type]
+            candidate = s
+            if region and len(re.sub(r"\D", "", s)) > 10 and not s.startswith("+"):
+                candidate = f"+{re.sub(r'[^0-9]', '', s)}"
+                region = None
+            parsed = phonenumbers.parse(candidate, region)  # type: ignore[arg-type]
             formatted = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
         except NumberParseException:
             logger.debug("phonenumbers.parse failed for %s", s)
@@ -312,8 +316,8 @@ def format_phone_e164_safe(value: str, default_country: str = "US") -> str:
             formatted = f"+1{digits}"
         elif len(digits) == 11 and digits.startswith("1"):
             formatted = f"+{digits}"
-        elif len(digits) > 11:
-            formatted = s
+        elif 11 < len(digits) <= 15 and not s.startswith("+"):
+            formatted = f"+{digits}"
         elif s.startswith("+"):
             formatted = re.sub(r"[^\d+]", "", s)
         else:

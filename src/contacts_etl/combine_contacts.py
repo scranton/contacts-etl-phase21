@@ -113,7 +113,8 @@ CITY_STATE_POSTAL_PATTERN = re.compile(
 STATE_CODE_SET = set(STATE_ABBR.values())
 PHONE_EXTENSION_PATTERN = re.compile(r"^(?:ext\.?|extension|x)?\s*(\d{1,6})$", re.IGNORECASE)
 PHONE_INLINE_EXTENSION_PATTERN = re.compile(
-    r"^(?P<number>.+?)(?:[\s,;/]*(?:ext\.?|extension|x)\s*(?P<ext>\d{1,6}))\s*$",
+    r"^(?P<number>.+?)(?:[\s,;/]*(?:ext\.?|extension|x)\s*(?P<ext>\d{1,6})"
+    r"|p(?P<ext2>\d{1,6})#)\s*$",
     re.IGNORECASE,
 )
 STATE_NAME_SET = set(STATE_ABBR.keys())
@@ -372,13 +373,36 @@ def _split_google_multi_values(raw: str) -> List[str]:
     return [segment for segment in segments if segment]
 
 
+def _unescape_vcard_value(value: str) -> str:
+    if not value:
+        return ""
+    replacements = {
+        r"\\;": ";",
+        r"\\,": ",",
+        r"\\n": "\n",
+        r"\\N": "\n",
+        r"\\\\": "\\",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+    return value
+
+
 def _strip_phone_extension(segment: str) -> Tuple[str, str]:
+    segment = segment.strip()
+    if ";" in segment:
+        base, candidate = segment.rsplit(";", 1)
+        candidate = candidate.strip()
+        if candidate.isdigit() and 1 <= len(candidate) <= 6:
+            return base.strip(), candidate
     match = PHONE_INLINE_EXTENSION_PATTERN.match(segment)
-    if match and match.group("ext"):
-        number = (match.group("number") or "").strip(" ,;/")
-        extension = match.group("ext").strip()
-        if number:
-            return number, extension
+    if match:
+        ext_value = match.group("ext") or match.group("ext2")
+        if ext_value:
+            number = (match.group("number") or "").strip(" ,;/")
+            extension = ext_value.strip()
+            if number:
+                return number, extension
     return segment, ""
 
 
@@ -762,7 +786,10 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
         phone_map: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
         address_map: "OrderedDict[str, Address]" = OrderedDict()
         email_map: "OrderedDict[str, str]" = OrderedDict()
-        for line in b.splitlines():
+        for raw_line in b.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
             if line.startswith("FN:"):
                 record.full_name_raw = line[3:].strip()
             elif line.startswith("N:"):
@@ -807,6 +834,7 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
             elif line.upper().startswith("TEL") and ":" in line:
                 params_part, value = line.split(":", 1)
                 params = params_part.split(";")[1:]
+                value = _unescape_vcard_value(value)
                 tokens = _extract_type_tokens(params)
                 label = ""
                 preferred_order = [
@@ -830,6 +858,8 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                 base_value, inline_ext = _strip_phone_extension(value.strip())
                 _record_phone(phone_map, base_value, label, inline_ext)
             elif line.startswith("ADR"):
+                if ":" not in line:
+                    continue
                 parts = line.split(":", 1)[1].split(";")
                 address = Address(
                     po_box=parts[0].strip() if len(parts) > 0 else "",
@@ -1052,6 +1082,9 @@ def _merge_cluster(
                 )
                 rendered = f"{rendered_value}::{phone.label}" if phone.label else rendered_value
                 cluster_non_standard_phones.add(rendered)
+                key = (rendered_value, phone.extension or "")
+                if key not in all_phones:
+                    all_phones[key] = phone.label or "invalid"
                 continue
             key = (normalized_value, phone.extension or "")
             existing_label = all_phones.get(key)
@@ -1142,8 +1175,6 @@ def _merge_cluster(
                     _format_phone_with_extension(phone.value, phone.extension)
                     for phone in raw_record.phones
                 ),
-                invalid_emails="|".join(record_extra.get("invalid_emails", [])),
-                non_standard_phones="|".join(record_extra.get("non_standard_phones", [])),
             )
         )
 
@@ -1152,7 +1183,6 @@ def _merge_cluster(
     merged.extra["source_count"] = len(unique_sources) or len(cluster_records)
     merged.extra["source_row_count"] = len(cluster_records)
     if cluster_invalid_emails:
-        merged.extra["invalid_emails"] = sorted(cluster_invalid_emails)
         logger.info(
             "Contact %s encountered %d invalid email(s): %s",
             contact_id,
@@ -1160,9 +1190,8 @@ def _merge_cluster(
             ", ".join(list(cluster_invalid_emails)[:5]),
         )
     if cluster_non_standard_phones:
-        merged.extra["non_standard_phones"] = sorted(cluster_non_standard_phones)
         logger.info(
-            "Contact %s flagged %d non-standard phone(s): %s",
+            "Contact %s encountered %d non-standard phone(s): %s",
             contact_id,
             len(cluster_non_standard_phones),
             ", ".join(list(cluster_non_standard_phones)[:5]),
@@ -1219,8 +1248,6 @@ def build(
                     for phone in record.phones
                 ),
                 "addresses_json": extra.get("addresses_json", "[]"),
-                "invalid_emails": "|".join(sorted(set(extra.get("invalid_emails", [])))),
-                "non_standard_phones": "|".join(sorted(set(extra.get("non_standard_phones", [])))),
                 "source_count": extra.get("source_count", 1),
                 "source_row_count": extra.get("source_row_count", extra.get("source_count", 1)),
             }
