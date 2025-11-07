@@ -33,7 +33,7 @@ ETL toolkit for unifying contact exports from LinkedIn, macOS Contacts (VCF), an
 
 | Stage | Command | Key Files |
 |-------|---------|-----------|
-| Consolidation | `contacts-consolidate --config config.yaml` | `output/consolidated_contacts.csv`, `output/consolidated_lineage.csv` |
+| Consolidation | `contacts-consolidate --config config.yaml` | `output/consolidated_contacts.csv`, `output/consolidated_lineage.csv`, `output/flattened_contacts.csv` |
 | Validation | `contacts-validate --config config.yaml` | `output/validation_report.csv`, `output/contact_quality_scored.csv` |
 | Confidence | `contacts-confidence --config config.yaml` | `output/confidence_report.csv`, `output/confidence_summary.csv` |
 | Tagging & Referral | `contacts-tag --config config.yaml` | `output/tagged_contacts.csv`, `output/referral_targets.csv` |
@@ -41,8 +41,9 @@ ETL toolkit for unifying contact exports from LinkedIn, macOS Contacts (VCF), an
 Consolidated contacts include:
 
 - Normalized emails/phones/addresses with lowercased labels (deduped with preference for the freshest source: LinkedIn > macOS VCF > Gmail).
-- `invalid_emails` and `non_standard_phones` columns so you can see what was dropped during normalization.
-- Source lineage and counts (`source_count`, `source_row_count`) for auditability.
+- Inline channel visibility: malformed emails/phones are retained with label `invalid` so you can see the raw values without scanning auxiliary columns.
+- Source lineage and counts (`source_count`, `source_row_count`) for auditability, plus a `department` field sourced from Gmail and VCF data when available.
+- A flattened projection (`output/flattened_contacts.csv`) that surfaces the first `home`, `work`, and `other` email/phone/address for CRM systems that need fixed columns.
 
 ---
 

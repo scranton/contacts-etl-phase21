@@ -9,7 +9,7 @@
 ## Desired Outcomes
 
 - **Accuracy**: High precision merges that prefer the most recent source (LinkedIn > macOS VCF > Gmail) while retaining alternate channel data for review.
-- **Transparency**: Outputs surface any discarded emails/phones (`invalid_emails`, `non_standard_phones`) and expose source counts for each contact.
+- **Transparency**: Outputs retain malformed channels in-line (labelled `invalid`), provide lineage counts for every contact, and include a flattened home/work/other view for quick CRM validation.
 - **Operational Readiness**: Pipeline commands (`make pipeline` or stage-specific CLI) are fast enough for iterative reruns and produce consistent artifacts for downstream tools.
 
 ## Non-Goals (for now)
@@ -23,8 +23,8 @@
 | Source | Format | Strengths | Caveats |
 |--------|--------|-----------|---------|
 | LinkedIn export | CSV | Fresh company/title, LinkedIn URL, reliable name components | Email often missing; phone labels absent |
-| macOS Contacts | VCF v3 | Structured name parts, handwritten notes, labelled phones/emails | Professional metadata often stale |
-| Gmail export | CSV | Multiple emails/phones with labels, addresses, notes | Names are free-form; many unlabeled phones |
+| macOS Contacts | VCF v3 | Structured name parts, organisation hierarchy/department hints, labelled phones/emails | Professional metadata often stale; vCard escaping must be normalized |
+| Gmail export | CSV | Multiple emails/phones with labels, addresses, department, notes | Names are free-form; many unlabeled phones (defaulted to `other`) |
 
 ## Privacy & Security
 
@@ -42,6 +42,6 @@
 ## Success Signals
 
 - No duplicate `contact_id` values (pipeline aborts if detected).
-- Invalid/uncertain channel data is visible (not silently dropped).
+- Invalid/uncertain channel data is visible (retained with label `invalid`).
 - Lineage columns (`source`, `source_row_id`, `source_count`) are populated for every consolidated record.
 - Tests (`make test`) run on synthetic data and pass without exposing PII.
