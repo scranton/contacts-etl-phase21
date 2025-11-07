@@ -8,7 +8,7 @@ normalization:
   default_phone_country: US
   drop_invalid_emails: false
   drop_invalid_phones: false
-  email_dns_mx_check: false
+  email_dns_mx_check: true
   keep_generational_suffixes:
   - jr
   - sr

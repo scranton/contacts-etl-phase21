@@ -88,6 +88,22 @@ def parse_addresses_json(addresses_json: object) -> Tuple[int, int, List[Dict[st
     return valid_count, len(addrs), details
 
 
+def _load_flattened_map(path: str) -> Dict[str, Dict[str, str]]:
+    flattened: Dict[str, Dict[str, str]] = {}
+    if not os.path.exists(path):
+        return flattened
+    try:
+        df = pd.read_csv(path, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as exc:  # pragma: no cover
+        logger.warning("Unable to read flattened contacts: %s", exc)
+        return flattened
+    for _, row in df.iterrows():
+        cid = str(row.get("contact_id", ""))
+        if cid:
+            flattened[cid] = {str(col): str(row[col]) for col in df.columns}
+    return flattened
+
+
 def main():
     parser = argparse.ArgumentParser(description="Validate & score consolidated contacts.")
     parser.add_argument("--config", type=str, default=None)
@@ -109,17 +125,28 @@ def main():
     )
     out_dir = args.out_dir or outputs.get("dir", os.getcwd())
     df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
+    flattened_map = _load_flattened_map(os.path.join(out_dir, "flattened_contacts.csv"))
 
     records: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
         e_valid, e_total, e_details = validate_email_list(row.get("emails", ""))
         p_valid, p_total, p_details = validate_phone_list(row.get("phones", ""))
         a_valid, a_total, a_details = parse_addresses_json(row.get("addresses_json", ""))
+        cid = str(row.get("contact_id", ""))
+        department_value = str(row.get("department", "") or "").strip()
+        flattened = flattened_map.get(cid, {})
+        home_email_present = 1 if str(flattened.get("home_email", "")).strip() else 0
+        work_email_present = 1 if str(flattened.get("work_email", "")).strip() else 0
+        home_phone_present = 1 if str(flattened.get("home_phone", "")).strip() else 0
+        work_phone_present = 1 if str(flattened.get("work_phone", "")).strip() else 0
+        home_address_present = 1 if str(flattened.get("home_address", "")).strip() else 0
+        work_address_present = 1 if str(flattened.get("work_address", "")).strip() else 0
         rec = {
-            "contact_id": row.get("contact_id", ""),
+            "contact_id": cid,
             "full_name": row.get("full_name", ""),
             "company": row.get("company", ""),
             "title": row.get("title", ""),
+            "department": department_value,
             "linkedin_url": row.get("linkedin_url", ""),
             "email_valid_count": e_valid,
             "email_total": e_total,
@@ -130,6 +157,13 @@ def main():
             "emails_detail": json.dumps(e_details, ensure_ascii=False),
             "phones_detail": json.dumps(p_details, ensure_ascii=False),
             "addresses_detail": json.dumps(a_details, ensure_ascii=False),
+            "department_missing": 0 if department_value else 1,
+            "home_email_present": home_email_present,
+            "work_email_present": work_email_present,
+            "home_phone_present": home_phone_present,
+            "work_phone_present": work_phone_present,
+            "home_address_present": home_address_present,
+            "work_address_present": work_address_present,
         }
         # Simple score (can parametrize later)
         email_score = 40 if (0 < e_total == e_valid) else (20 if e_valid > 0 else 0)
@@ -153,6 +187,13 @@ def main():
                 "addr_valid_count",
                 "addr_total",
                 "quality_score",
+                "department_missing",
+                "home_email_present",
+                "work_email_present",
+                "home_phone_present",
+                "work_phone_present",
+                "home_address_present",
+                "work_address_present",
             ]
         ],
         on="contact_id",

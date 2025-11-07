@@ -1,13 +1,16 @@
 import argparse
 import csv
+import logging
 import os
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import pandas as pd
 
 from contacts_etl.common import load_config, warn_missing
 from contacts_etl.config_loader import PipelineConfig
 from contacts_etl.logging_utils import configure_logging
+
+logger = logging.getLogger(__name__)
 
 
 def pct(n, d):
@@ -45,6 +48,44 @@ def load_validation_map(validation_csv) -> Dict[str, Dict[str, int]]:
     return v
 
 
+def _parse_channel_entries(raw: str) -> List[Tuple[str, str]]:
+    entries: List[Tuple[str, str]] = []
+    if not raw:
+        return entries
+    for part in raw.split("|"):
+        part = part.strip()
+        if not part:
+            continue
+        if "::" in part:
+            value, label = part.split("::", 1)
+        else:
+            value, label = part, ""
+        entries.append((value.strip(), label.strip().lower()))
+    return entries
+
+
+def _all_invalid(entries: List[Tuple[str, str]]) -> bool:
+    if not entries:
+        return False
+    return all((not value) or label == "invalid" for value, label in entries)
+
+
+def _load_flattened_map(path: str) -> Dict[str, Dict[str, str]]:
+    flattened: Dict[str, Dict[str, str]] = {}
+    if not os.path.exists(path):
+        return flattened
+    try:
+        df = pd.read_csv(path, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as exc:  # pragma: no cover
+        logger.warning("Unable to read flattened contacts: %s", exc)
+        return flattened
+    for _, row in df.iterrows():
+        cid = str(row.get("contact_id", ""))
+        if cid:
+            flattened[cid] = {str(col): str(row[col]) for col in df.columns}
+    return flattened
+
+
 def compute_corroborators(row):
     """Count distinct corroborators present: email, phone, address, linkedin"""
     corr = 0
@@ -66,14 +107,25 @@ def has_company_title(row):
     return 1 if (str(row.get("company", "")).strip() or str(row.get("title", "")).strip()) else 0
 
 
-def confidence_score(row, vmap: Dict[str, Dict[str, int]]) -> int:
+def confidence_score(
+    row, vmap: Dict[str, Dict[str, int]], flattened_map: Dict[str, Dict[str, str]]
+) -> int:
     """0-100, additive with caps. Weighted for practicality."""
     cid = str(row.get("contact_id", ""))
     vm: Dict[str, int] = vmap.get(cid, {})
+    flattened = flattened_map.get(cid, {})
     email_valid = 0 < vm.get("email_total", 0) == vm.get("email_valid_count", 0)
     phone_valid = 0 < vm.get("phone_total", 0) == vm.get("phone_valid_count", 0)
     addr_any_valid = vm.get("addr_valid_count", 0) > 0
     lineage_depth = int(row.get("source_count", 1))
+    email_entries = _parse_channel_entries(row.get("emails", ""))
+    phone_entries = _parse_channel_entries(row.get("phones", ""))
+    department_present = bool(str(row.get("department", "") or "").strip())
+    work_channels = sum(
+        1
+        for key in ("work_email", "work_phone", "work_address")
+        if str(flattened.get(key, "") or "").strip()
+    )
 
     score: float = 0.0
 
@@ -92,11 +144,15 @@ def confidence_score(row, vmap: Dict[str, Dict[str, int]]) -> int:
     else:
         score += 2
 
-    # LinkedIn + company/title (up to +15)
+    # LinkedIn + company/title + department + work channels (up to +20)
     if str(row.get("linkedin_url", "")).strip():
-        score += 8
+        score += 6
     if has_company_title(row):
-        score += 7
+        score += 6
+    if department_present:
+        score += 3
+    if work_channels:
+        score += min(work_channels * 2, 6)
 
     # All-valid channels bonus (up to +10)
     if email_valid:
@@ -111,6 +167,12 @@ def confidence_score(row, vmap: Dict[str, Dict[str, int]]) -> int:
         score += 3
     if str(row.get("full_name", "")).strip():
         score += 2
+
+    # Penalties when every entry for a channel is labelled invalid
+    if _all_invalid(email_entries):
+        score -= 5
+    if _all_invalid(phone_entries):
+        score -= 4
 
     return int(max(0, min(100, score)))
 
@@ -143,15 +205,17 @@ def main():
     config = load_config(args)
     configure_logging(config, level_override=args.log_level)
     contacts_csv, validation_csv, out_dir = _resolve_paths(args, config)
+    flattened_csv = os.path.join(out_dir, "flattened_contacts.csv")
 
     # Load data
     contacts_df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
     vmap = load_validation_map(validation_csv)
+    flattened_map = _load_flattened_map(flattened_csv)
 
     # Compute per-contact confidence
     scores = []
     for _, row in contacts_df.iterrows():
-        s = confidence_score(row, vmap)
+        s = confidence_score(row, vmap, flattened_map)
         scores.append(s)
     contacts_df["confidence_score"] = scores
     # Buckets

@@ -215,7 +215,7 @@ def test_build_exposes_nickname(monkeypatch):
         enable_nickname_equivalence=True,
     )
 
-    contacts_df, _ = cc.build(args)
+    contacts_df, _, _ = cc.build(args)
     assert list(contacts_df["nickname"]) == ["Johnny"]
 
 
@@ -245,11 +245,11 @@ def test_build_respects_nickname_equivalence(monkeypatch):
         enable_nickname_equivalence=True,
     )
 
-    contacts_enabled, _ = cc.build(base_args)
+    contacts_enabled, _, _ = cc.build(base_args)
     assert len(contacts_enabled) == 1
 
     base_args.enable_nickname_equivalence = False
-    contacts_disabled, _ = cc.build(base_args)
+    contacts_disabled, _, _ = cc.build(base_args)
     assert len(contacts_disabled) == 2
 
 
@@ -279,7 +279,7 @@ def test_build_matches_on_explicit_nickname(monkeypatch):
         enable_nickname_equivalence=True,
     )
 
-    contacts_df, _ = cc.build(args)
+    contacts_df, _, _ = cc.build(args)
     assert len(contacts_df) == 1
 
 
@@ -320,7 +320,7 @@ def test_build_keeps_distinct_household_members(monkeypatch):
         enable_nickname_equivalence=True,
     )
 
-    contacts_df, lineage_df = cc.build(base_args)
+    contacts_df, lineage_df, _ = cc.build(base_args)
     assert len(contacts_df) == 2
     assert set(contacts_df["first_name"]) == {"Alex", "Riley"}
     assert set(contacts_df["source_count"].astype(int)) == {1}
@@ -365,7 +365,7 @@ def test_merge_prefers_linkedin_metadata(monkeypatch):
         enable_nickname_equivalence=True,
     )
 
-    contacts_df, _ = cc.build(args)
+    contacts_df, _, _ = cc.build(args)
     assert len(contacts_df) == 1
     merged = contacts_df.iloc[0]
     assert merged["company"] == "Future Corp"
@@ -414,7 +414,7 @@ def test_load_vcards_filters_pref_and_internet_labels(tmp_path):
     entry = records[0]
     assert entry.emails == [
         Email(value="casey.work@example.com", label="work"),
-        Email(value="casey.other@example.com", label=""),
+        Email(value="casey.other@example.com", label="other"),
     ]
     assert entry.phones == [
         Phone(value="+1-555-000-0003", label="cell"),
