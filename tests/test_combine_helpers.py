@@ -373,6 +373,46 @@ def test_merge_prefers_linkedin_metadata(monkeypatch):
     assert merged["linkedin_url"] == "https://linkedin.com/in/jordan-example"
 
 
+def test_merge_prefers_specific_email_label(monkeypatch):
+    generic_record = ContactRecord(
+        source="mac_vcf",
+        source_row_id="10",
+        first_name="Chris",
+        last_name="Wright",
+        emails=[Email(value="cwright@example.com", label="other")],
+    )
+    work_record = ContactRecord(
+        source="mac_vcf",
+        source_row_id="11",
+        first_name="Chris",
+        last_name="Wright",
+        emails=[Email(value="cwright@example.com", label="work")],
+        company="TeamLogic IT",
+    )
+
+    monkeypatch.setattr(cc, "_load_sources", lambda config: [generic_record, work_record])
+
+    args = SimpleNamespace(
+        config=None,
+        linkedin_csv=None,
+        gmail_csv=None,
+        mac_vcf=None,
+        out_dir=None,
+        default_phone_country="US",
+        first_name_similarity_threshold=0.0,
+        merge_score_threshold=0.0,
+        relaxed_merge_threshold=0.0,
+        require_corroborator=False,
+        keep_generational_suffixes=None,
+        professional_suffixes=None,
+        enable_nickname_equivalence=True,
+    )
+
+    contacts_df, _, _ = cc.build(args)
+    emails = list(contacts_df["emails"])[0]
+    assert "cwright@example.com::work" in emails
+
+
 def test_normalize_email_dedup_preserves_best_label():
     record = ContactRecord(
         emails=[

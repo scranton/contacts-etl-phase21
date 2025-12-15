@@ -190,6 +190,13 @@ SOURCE_PRIORITY = {
     "gmail": 1,
 }
 
+APPLE_LABEL_TOKENS = {
+    "_$!<work>!$_": "work",
+    "_$!<home>!$_": "home",
+    "_$!<other>!$_": "other",
+}
+APPLE_LABEL_PATTERN = re.compile(r"_\$!<(.+?)>!$_", re.IGNORECASE)
+
 
 def _source_priority(record: ContactRecord) -> int:
     return SOURCE_PRIORITY.get((record.source or "").lower(), 0)
@@ -204,6 +211,13 @@ def _should_replace_label(
     if candidate_priority > existing_priority:
         return True
     if candidate_priority == existing_priority and candidate_label and not existing_label:
+        return True
+    if (
+        candidate_priority == existing_priority
+        and existing_label == "other"
+        and candidate_label
+        and candidate_label != "other"
+    ):
         return True
     return False
 
@@ -385,6 +399,19 @@ def _split_google_multi_values(raw: str) -> List[str]:
         return []
     segments = [segment.strip() for segment in GOOGLE_MULTI_VALUE_SPLIT.split(raw)]
     return [segment for segment in segments if segment]
+
+
+def _normalize_apple_label(label: str) -> str:
+    raw = (label or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if lowered in APPLE_LABEL_TOKENS:
+        return APPLE_LABEL_TOKENS[lowered]
+    match = APPLE_LABEL_PATTERN.match(raw)
+    if match:
+        return match.group(1).strip().lower()
+    return lowered
 
 
 def _unescape_vcard_value(value: str) -> str:
@@ -860,14 +887,32 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
         phone_map: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
         address_map: "OrderedDict[str, Address]" = OrderedDict()
         email_map: "OrderedDict[str, str]" = OrderedDict()
+        apple_item_labels: Dict[str, str] = {}
         for raw_line in b.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
-            if line.startswith("FN:"):
-                record.full_name_raw = line[3:].strip()
-            elif line.startswith("N:"):
-                components = line[2:].split(";")
+            item_key = ""
+            header = line
+            value_part = ""
+            if ":" in line:
+                header, value_part = line.split(":", 1)
+            if "." in header:
+                maybe_item, remainder = header.split(".", 1)
+                if maybe_item.lower().startswith("item"):
+                    item_key = maybe_item.lower()
+                    header = remainder
+            header_upper = header.upper()
+            if header_upper.startswith("X-ABLABEL"):
+                if item_key:
+                    apple_item_labels[item_key] = _normalize_apple_label(value_part)
+                continue
+            if header_upper.startswith("FN"):
+                record.full_name_raw = value_part.strip()
+            elif header_upper.endswith("NICKNAME") and value_part:
+                record.nickname = value_part.strip()
+            elif header_upper.startswith("N"):
+                components = value_part.split(";")
                 record.last_name = components[0].strip() if len(components) > 0 else ""
                 record.first_name = components[1].strip() if len(components) > 1 else ""
                 record.middle_name = components[2].strip() if len(components) > 2 else ""
@@ -886,11 +931,8 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                             ],
                         )
                     ).strip()
-            elif ":" in line and line.split(":", 1)[0].upper().split(";")[0].endswith("NICKNAME"):
-                record.nickname = line.split(":", 1)[1].strip()
-            elif line.upper().startswith("EMAIL") and ":" in line:
-                params_part, value = line.split(":", 1)
-                params = params_part.split(";")[1:]
+            elif header_upper.startswith("EMAIL") and value_part:
+                params = header.split(";")[1:]
                 email_tokens = _extract_type_tokens(params)
                 preferred_email_labels = [
                     "work",
@@ -904,13 +946,16 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                         break
                 if not label and email_tokens:
                     label = email_tokens[0]
+                if not label and item_key and item_key in apple_item_labels:
+                    label = apple_item_labels[item_key]
+                if (not label or label == "other") and (record.company or record.title):
+                    label = "work"
                 if not label:
                     label = "other"
-                _record_email(email_map, value, label)
-            elif line.upper().startswith("TEL") and ":" in line:
-                params_part, value = line.split(":", 1)
-                params = params_part.split(";")[1:]
-                value = _unescape_vcard_value(value)
+                _record_email(email_map, value_part, label)
+            elif header_upper.startswith("TEL") and value_part:
+                params = header.split(";")[1:]
+                value = _unescape_vcard_value(value_part)
                 tokens = _extract_type_tokens(params)
                 label = ""
                 preferred_order = [
@@ -931,15 +976,14 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                         break
                 if not label and tokens:
                     label = tokens[0]
+                if not label and item_key and item_key in apple_item_labels:
+                    label = apple_item_labels[item_key]
                 if not label:
                     label = "other"
                 base_value, inline_ext = _strip_phone_extension(value.strip())
                 _record_phone(phone_map, base_value, label, inline_ext)
-            elif line.upper().startswith("ADR"):
-                if ":" not in line:
-                    continue
-                params_part, value = line.split(":", 1)
-                params = params_part.split(";")[1:]
+            elif header_upper.startswith("ADR") and value_part:
+                params = header.split(";")[1:]
                 tokens = _extract_type_tokens(params)
                 label = ""
                 preferred_addr_labels = ["work", "home", "other"]
@@ -949,9 +993,11 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                         break
                 if not label and tokens:
                     label = tokens[0]
+                if not label and item_key and item_key in apple_item_labels:
+                    label = apple_item_labels[item_key]
                 if not label:
                     label = "other"
-                parts = value.split(";")
+                parts = value_part.split(";")
                 address = Address(
                     po_box=parts[0].strip() if len(parts) > 0 else "",
                     extended=parts[1].strip() if len(parts) > 1 else "",
@@ -968,20 +1014,20 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                 existing = address_map.get(key)
                 if existing is None or (not existing.label and address.label):
                     address_map[key] = address
-            elif line.startswith("ORG:"):
-                value = _unescape_vcard_value(line[4:].strip())
+            elif header_upper.startswith("ORG") and value_part:
+                value = _unescape_vcard_value(value_part.strip())
                 components = value.split(";") if value else []
                 company = components[0].strip() if components else ""
                 department_parts = [part.strip() for part in components[1:] if part.strip()]
                 record.company = company
                 if department_parts:
                     record.department = ", ".join(department_parts)
-            elif line.startswith("TITLE:"):
-                record.title = _unescape_vcard_value(line[6:].strip())
-            elif line.startswith("URL:") and "linkedin.com" in line.lower():
-                record.linkedin_url = line[4:].strip()
-            elif line.startswith("NOTE:"):
-                record.notes = line[5:].strip()
+            elif header_upper.startswith("TITLE") and value_part:
+                record.title = _unescape_vcard_value(value_part.strip())
+            elif header_upper.startswith("URL") and value_part and "linkedin.com" in value_part.lower():
+                record.linkedin_url = value_part.strip()
+            elif header_upper.startswith("NOTE") and value_part:
+                record.notes = value_part.strip()
         record.emails = [Email(value=value, label=label) for value, label in email_map.items()]
         record.phones = [
             Phone(value=value, extension=extension, label=label)
