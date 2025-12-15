@@ -40,6 +40,15 @@ class ValidationConfig:
 
 
 @dataclass
+class QualityConfig:
+    email_full_score: int = 40
+    email_partial_score: int = 20
+    phone_full_score: int = 30
+    phone_partial_score: int = 15
+    address_any_score: int = 30
+
+
+@dataclass
 class TaggingConfig:
     prior_companies: list[str]
     prior_domains: list[str]
@@ -58,6 +67,7 @@ class PipelineConfig:
     normalization: NormalizationConfig
     dedupe: DedupeConfig
     validation: ValidationConfig
+    quality: QualityConfig
     tagging: TaggingConfig
     logging: LoggingConfig
 
@@ -77,6 +87,7 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
     dedupe_cfg = config_data.get("dedupe", {})
     validation_cfg = config_data.get("validation", {})
     tagging_cfg = config_data.get("tagging", {})
+    quality_cfg = config_data.get("quality", {})
     logging_cfg = config_data.get("logging", {})
 
     outputs_dir = Path(getattr(args, "out_dir", None) or outputs_cfg.get("dir") or os.getcwd())
@@ -116,6 +127,14 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         email_dns_mx_check=validation_cfg.get("email_dns_mx_check", False),
     )
 
+    quality = QualityConfig(
+        email_full_score=quality_cfg.get("email_full_score", 40),
+        email_partial_score=quality_cfg.get("email_partial_score", 20),
+        phone_full_score=quality_cfg.get("phone_full_score", 30),
+        phone_partial_score=quality_cfg.get("phone_partial_score", 15),
+        address_any_score=quality_cfg.get("address_any_score", 30),
+    )
+
     tagging = TaggingConfig(
         prior_companies=tagging_cfg.get("prior_companies", []),
         prior_domains=tagging_cfg.get("prior_domains", []),
@@ -140,6 +159,7 @@ def load_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         normalization=normalization,
         dedupe=dedupe,
         validation=validation,
+        quality=quality,
         tagging=tagging,
         logging=logging_config,
     )

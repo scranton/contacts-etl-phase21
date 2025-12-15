@@ -114,6 +114,12 @@ def main():
     args = parser.parse_args()
     config = load_config(args)
     configure_logging(config, level_override=args.log_level)
+    quality_cfg = getattr(config, "quality", None)
+    email_full_score = getattr(quality_cfg, "email_full_score", 40)
+    email_partial_score = getattr(quality_cfg, "email_partial_score", 20)
+    phone_full_score = getattr(quality_cfg, "phone_full_score", 30)
+    phone_partial_score = getattr(quality_cfg, "phone_partial_score", 15)
+    address_any_score = getattr(quality_cfg, "address_any_score", 30)
     cfg: Dict[str, Any] = {}
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
@@ -166,9 +172,21 @@ def main():
             "work_address_present": work_address_present,
         }
         # Simple score (can parametrize later)
-        email_score = 40 if (0 < e_total == e_valid) else (20 if e_valid > 0 else 0)
-        phone_score = 30 if (0 < p_total == p_valid) else (15 if p_valid > 0 else 0)
-        addr_score = 30 if a_valid > 0 else 0
+        if 0 < e_total == e_valid:
+            email_score = email_full_score
+        elif e_valid > 0:
+            email_score = email_partial_score
+        else:
+            email_score = 0
+
+        if 0 < p_total == p_valid:
+            phone_score = phone_full_score
+        elif p_valid > 0:
+            phone_score = phone_partial_score
+        else:
+            phone_score = 0
+
+        addr_score = address_any_score if a_valid > 0 else 0
         rec["quality_score"] = email_score + phone_score + addr_score
         records.append(rec)
 

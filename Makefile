@@ -5,17 +5,25 @@ VENV_DIR ?= .venv
 VENV_BIN := $(VENV_DIR)/bin
 PYTHON_BIN := $(VENV_BIN)/python
 PIP := $(VENV_BIN)/pip
+CLI_SCRIPTS := contacts-consolidate contacts-validate contacts-confidence contacts-tag
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile | sort | awk 'BEGIN {FS = ":.*## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 $(PYTHON_BIN):
 	$(PYTHON) -m venv $(VENV_DIR)
-	$(PIP) install --upgrade pip
+	$(PYTHON_BIN) -m ensurepip --upgrade
 
 venv: $(PYTHON_BIN) ## Create the virtualenv (if missing) and upgrade pip
 
 install: venv ## Install project with development extras
+	@for script in $(CLI_SCRIPTS); do \
+		if [ -d "$(VENV_BIN)" ] && [ ! -f "$(VENV_BIN)/$$script" ]; then \
+			touch "$(VENV_BIN)/$$script"; \
+		fi; \
+	done
+	$(PYTHON_BIN) -m ensurepip --upgrade
+	@$(PYTHON_BIN) -c "import setuptools" >/dev/null 2>&1 || $(PIP) install setuptools wheel
 	$(PIP) install --no-build-isolation -e ".[dev]"
 
 lint: install ## Run static lint checks

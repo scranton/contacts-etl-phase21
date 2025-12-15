@@ -4,6 +4,7 @@ import argparse
 import csv
 import logging
 import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -109,13 +110,14 @@ def _build_notes_map(
 def build(args: argparse.Namespace, config: Optional[PipelineConfig] = None):
     config = config or load_config(args)
     contacts_csv, lineage_csv, out_dir = _resolve_paths(args, config)
+    out_dir_path = Path(out_dir)
 
     gmail_notes = _load_gmail_notes(config.inputs.get("gmail_csv"))
     vcf_notes = _load_vcf_notes(config.inputs.get("mac_vcf"))
     notes_map = _build_notes_map(lineage_csv, gmail_notes, vcf_notes)
 
     df = pd.read_csv(contacts_csv, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL)
-    confidence_path = config.outputs.dir / "confidence_report.csv"
+    confidence_path = out_dir_path / "confidence_report.csv"
     if confidence_path.exists():
         conf_df = pd.read_csv(
             confidence_path, dtype=str, keep_default_na=False, quoting=csv.QUOTE_ALL

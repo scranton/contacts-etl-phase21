@@ -195,6 +195,19 @@ def _source_priority(record: ContactRecord) -> int:
     return SOURCE_PRIORITY.get((record.source or "").lower(), 0)
 
 
+def _should_replace_label(
+    existing_label: str,
+    existing_priority: int,
+    candidate_label: str,
+    candidate_priority: int,
+) -> bool:
+    if candidate_priority > existing_priority:
+        return True
+    if candidate_priority == existing_priority and candidate_label and not existing_label:
+        return True
+    return False
+
+
 def _choose_by_priority(
     records: List[ContactRecord], getter: Callable[[ContactRecord], str]
 ) -> str:
@@ -922,10 +935,23 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                     label = "other"
                 base_value, inline_ext = _strip_phone_extension(value.strip())
                 _record_phone(phone_map, base_value, label, inline_ext)
-            elif line.startswith("ADR"):
+            elif line.upper().startswith("ADR"):
                 if ":" not in line:
                     continue
-                parts = line.split(":", 1)[1].split(";")
+                params_part, value = line.split(":", 1)
+                params = params_part.split(";")[1:]
+                tokens = _extract_type_tokens(params)
+                label = ""
+                preferred_addr_labels = ["work", "home", "other"]
+                for preferred in preferred_addr_labels:
+                    if preferred in tokens:
+                        label = preferred
+                        break
+                if not label and tokens:
+                    label = tokens[0]
+                if not label:
+                    label = "other"
+                parts = value.split(";")
                 address = Address(
                     po_box=parts[0].strip() if len(parts) > 0 else "",
                     extended=parts[1].strip() if len(parts) > 1 else "",
@@ -934,6 +960,7 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                     state=parts[4].strip() if len(parts) > 4 else "",
                     postal_code=parts[5].strip() if len(parts) > 5 else "",
                     country=parts[6].strip() if len(parts) > 6 else "",
+                    label=label,
                 )
                 key_payload = address.to_dict()
                 key_payload.pop("label", None)
@@ -1132,8 +1159,8 @@ def _merge_cluster(
     department = _choose_by_priority(cluster_records, lambda r: r.department)
     linkedin = _choose_by_priority(cluster_records, lambda r: r.linkedin_url)
 
-    all_emails: Dict[str, str] = {}
-    all_phones: Dict[Tuple[str, str], str] = {}
+    all_emails: Dict[str, Tuple[str, int]] = {}
+    all_phones: Dict[Tuple[str, str], Tuple[str, int]] = {}
     cluster_invalid_emails: Set[str] = set()
     cluster_non_standard_phones: Set[str] = set()
     all_addresses: List[Dict[str, str]] = []
@@ -1142,8 +1169,17 @@ def _merge_cluster(
         record_extra = record.extra or {}
         cluster_invalid_emails.update(record_extra.get("invalid_emails", []))
         cluster_non_standard_phones.update(record_extra.get("non_standard_phones", []))
+        record_priority = _source_priority(record)
         for email in record.emails:
-            all_emails[email.value] = email.label
+            existing = all_emails.get(email.value)
+            if existing is None:
+                all_emails[email.value] = (email.label, record_priority)
+            else:
+                current_label, current_priority = existing
+                if _should_replace_label(
+                    current_label, current_priority, email.label, record_priority
+                ):
+                    all_emails[email.value] = (email.label, record_priority)
         for phone in record.phones:
             normalized_value, is_confident = _normalize_phone_value(phone.value, default_country)
             if not normalized_value:
@@ -1155,17 +1191,19 @@ def _merge_cluster(
                 rendered = f"{rendered_value}::{phone.label}" if phone.label else rendered_value
                 cluster_non_standard_phones.add(rendered)
                 key = (rendered_value, phone.extension or "")
-                if key not in all_phones:
-                    all_phones[key] = phone.label or "invalid"
+                existing = all_phones.get(key)
+                candidate_label = phone.label or "invalid"
+                if existing is None or _should_replace_label(
+                    existing[0], existing[1], candidate_label, record_priority
+                ):
+                    all_phones[key] = (candidate_label, record_priority)
                 continue
             key = (normalized_value, phone.extension or "")
-            existing_label = all_phones.get(key)
-            if existing_label:
-                # Prefer non-empty labels or keep an existing confident label
-                if phone.label and not existing_label:
-                    all_phones[key] = phone.label
-            else:
-                all_phones[key] = phone.label
+            existing = all_phones.get(key)
+            if existing is None or _should_replace_label(
+                existing[0], existing[1], phone.label, record_priority
+            ):
+                all_phones[key] = (phone.label, record_priority)
         for address in record.addresses:
             as_dict = address.to_dict()
             addr_key = json.dumps(as_dict, sort_keys=True)
@@ -1212,9 +1250,15 @@ def _merge_cluster(
         title=title,
         department=department,
         linkedin_url=linkedin,
-        emails=[Email(value=value, label=all_emails[value]) for value in sorted(all_emails.keys())],
+        emails=[
+            Email(value=value, label=all_emails[value][0]) for value in sorted(all_emails.keys())
+        ],
         phones=[
-            Phone(value=value, extension=extension, label=all_phones[(value, extension)])
+            Phone(
+                value=value,
+                extension=extension,
+                label=all_phones[(value, extension)][0],
+            )
             for value, extension in sorted(all_phones.keys())
         ],
         addresses=[],

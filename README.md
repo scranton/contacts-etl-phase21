@@ -25,7 +25,7 @@ ETL toolkit for unifying contact exports from LinkedIn, macOS Contacts (VCF), an
    make pipeline
    ```
 
-   Outputs land in `output/` (changeable via `config.yaml:outputs.dir`).
+   Outputs land in `output/` (changeable via `config.yaml:outputs.dir` or `--out-dir` overrides, which every CLI stage honors).
 
 ---
 
@@ -60,8 +60,8 @@ Open notebooks from the repo root so they can locate `config.yaml` and the confi
 
 ## Configuration & Logging
 
-- `config.yaml` controls input paths, output directory, normalization knobs, dedupe thresholds, tagging heuristics, and logging (`logging.level`).
-- CLI overrides exist for most options. Logging level precedence is: environment variable `CONTACTS_ETL_LOG_LEVEL` > CLI `--log-level` > `config.yaml` setting > default `WARNING`.
+- `config.yaml` controls input paths, output directory, normalization knobs, dedupe thresholds, validation weights (`quality.*` scores), tagging heuristics, and logging (`logging.level`).
+- CLI overrides exist for most options (including `--out-dir`). Logging level precedence is: environment variable `CONTACTS_ETL_LOG_LEVEL` > CLI `--log-level` > `config.yaml` setting > default `WARNING`.
 
 ---
 
