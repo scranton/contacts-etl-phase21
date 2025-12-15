@@ -413,6 +413,77 @@ def test_merge_prefers_specific_email_label(monkeypatch):
     assert "cwright@example.com::work" in emails
 
 
+def test_merge_assigns_other_when_email_label_missing(monkeypatch):
+    unlabeled = ContactRecord(
+        source="mac_vcf",
+        source_row_id="42",
+        first_name="Label",
+        last_name="Less",
+        emails=[Email(value="labelless@example.com", label="")],
+    )
+
+    monkeypatch.setattr(cc, "_load_sources", lambda config: [unlabeled])
+
+    args = SimpleNamespace(
+        config=None,
+        linkedin_csv=None,
+        gmail_csv=None,
+        mac_vcf=None,
+        out_dir=None,
+        default_phone_country="US",
+        first_name_similarity_threshold=0.88,
+        merge_score_threshold=1.2,
+        relaxed_merge_threshold=0.6,
+        require_corroborator=False,
+        keep_generational_suffixes=None,
+        professional_suffixes=None,
+        enable_nickname_equivalence=True,
+    )
+
+    contacts_df, _, _ = cc.build(args)
+    assert list(contacts_df["emails"])[0] == "labelless@example.com::other"
+
+
+def test_merge_prefers_newer_timestamp(monkeypatch):
+    older = ContactRecord(
+        source="mac_vcf",
+        source_row_id="1",
+        first_name="Casey",
+        last_name="Example",
+        company="Old Co",
+        source_timestamp="2024-01-01T00:00:00",
+    )
+    newer = ContactRecord(
+        source="mac_vcf",
+        source_row_id="2",
+        first_name="Casey",
+        last_name="Example",
+        company="New Co",
+        source_timestamp="2024-06-01T00:00:00",
+    )
+
+    monkeypatch.setattr(cc, "_load_sources", lambda config: [older, newer])
+
+    args = SimpleNamespace(
+        config=None,
+        linkedin_csv=None,
+        gmail_csv=None,
+        mac_vcf=None,
+        out_dir=None,
+        default_phone_country="US",
+        first_name_similarity_threshold=0.0,
+        merge_score_threshold=0.0,
+        relaxed_merge_threshold=0.0,
+        require_corroborator=False,
+        keep_generational_suffixes=None,
+        professional_suffixes=None,
+        enable_nickname_equivalence=True,
+    )
+
+    contacts_df, _, _ = cc.build(args)
+    assert list(contacts_df["company"])[0] == "New Co"
+
+
 def test_normalize_email_dedup_preserves_best_label():
     record = ContactRecord(
         emails=[

@@ -6,10 +6,12 @@ import json
 import logging
 from collections import defaultdict, OrderedDict
 from dataclasses import replace
+from datetime import datetime
 import re
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
+from dateutil import parser as dateparser
 
 from .common import (
     ContactRecord,
@@ -204,21 +206,58 @@ def _source_priority(record: ContactRecord) -> int:
 
 def _should_replace_label(
     existing_label: str,
-    existing_priority: int,
+    existing_rank: Tuple[Optional[datetime], int],
     candidate_label: str,
-    candidate_priority: int,
+    candidate_rank: Tuple[Optional[datetime], int],
 ) -> bool:
-    if candidate_priority > existing_priority:
+    if _rank_is_better(candidate_rank, existing_rank):
         return True
+    existing_priority = existing_rank[1]
+    candidate_priority = candidate_rank[1]
     if candidate_priority == existing_priority and candidate_label and not existing_label:
         return True
     if (
-        candidate_priority == existing_priority
-        and existing_label == "other"
+        existing_label == "other"
         and candidate_label
         and candidate_label != "other"
+        and not _rank_is_better(existing_rank, candidate_rank)
     ):
         return True
+    return False
+
+
+def _parse_timestamp(value: str) -> Optional[datetime]:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return dateparser.parse(text)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _record_timestamp(record: ContactRecord) -> Optional[datetime]:
+    return _parse_timestamp(getattr(record, "source_timestamp", ""))
+
+
+def _rank_is_better(
+    candidate_rank: Tuple[Optional[datetime], int], existing_rank: Tuple[Optional[datetime], int]
+) -> bool:
+    candidate_ts, candidate_priority = candidate_rank
+    existing_ts, existing_priority = existing_rank
+    if candidate_ts and existing_ts:
+        if candidate_ts > existing_ts:
+            return True
+        if candidate_ts < existing_ts:
+            return False
+    elif candidate_ts and not existing_ts:
+        return True
+    elif existing_ts and not candidate_ts:
+        return False
+    if candidate_priority > existing_priority:
+        return True
+    if candidate_priority < existing_priority:
+        return False
     return False
 
 
@@ -226,14 +265,14 @@ def _choose_by_priority(
     records: List[ContactRecord], getter: Callable[[ContactRecord], str]
 ) -> str:
     best_value = ""
-    best_priority = -1
+    best_rank: Tuple[Optional[datetime], int] = (None, -1)
     for record in records:
         value = getter(record)
         if not value:
             continue
-        priority = _source_priority(record)
-        if priority > best_priority:
-            best_priority = priority
+        rank = (_record_timestamp(record), _source_priority(record))
+        if best_value == "" or _rank_is_better(rank, best_rank):
+            best_rank = rank
             best_value = value
     return best_value
 
@@ -267,6 +306,8 @@ def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
         primary_email = safe_get(row, "Email Address")
         emails = [Email(value=primary_email, label="home")] if primary_email else []
         full_name_raw = " ".join([safe_get(row, "First Name"), safe_get(row, "Last Name")]).strip()
+        connected_on = safe_get(row, "Connected On")
+        timestamp = _parse_linkedin_date(connected_on)
         record = ContactRecord(
             full_name_raw=full_name_raw,
             company=safe_get(row, "Company"),
@@ -274,10 +315,25 @@ def _load_linkedin_csv(path: Optional[str]) -> List[ContactRecord]:
             linkedin_url=linkedin_url,
             source="linkedin",
             source_row_id=str(idx),
+            source_timestamp=timestamp,
             emails=emails,
         )
         records.append(record)
     return records
+
+
+def _parse_linkedin_date(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    for fmt in ("%d %b %Y", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.isoformat()
+        except ValueError:
+            continue
+    parsed = _parse_timestamp(text)
+    return parsed.isoformat() if parsed else ""
 
 
 def _extract_phone_values(raw: str) -> List[Tuple[str, str]]:
@@ -931,6 +987,8 @@ def _load_vcards(path: Optional[str]) -> List[ContactRecord]:
                             ],
                         )
                     ).strip()
+            elif header_upper.startswith("REV") and value_part:
+                record.source_timestamp = value_part.strip()
             elif header_upper.startswith("EMAIL") and value_part:
                 params = header.split(";")[1:]
                 email_tokens = _extract_type_tokens(params)
@@ -1205,8 +1263,8 @@ def _merge_cluster(
     department = _choose_by_priority(cluster_records, lambda r: r.department)
     linkedin = _choose_by_priority(cluster_records, lambda r: r.linkedin_url)
 
-    all_emails: Dict[str, Tuple[str, int]] = {}
-    all_phones: Dict[Tuple[str, str], Tuple[str, int]] = {}
+    all_emails: Dict[str, Tuple[str, Tuple[Optional[datetime], int]]] = {}
+    all_phones: Dict[Tuple[str, str], Tuple[str, Tuple[Optional[datetime], int]]] = {}
     cluster_invalid_emails: Set[str] = set()
     cluster_non_standard_phones: Set[str] = set()
     all_addresses: List[Dict[str, str]] = []
@@ -1215,17 +1273,17 @@ def _merge_cluster(
         record_extra = record.extra or {}
         cluster_invalid_emails.update(record_extra.get("invalid_emails", []))
         cluster_non_standard_phones.update(record_extra.get("non_standard_phones", []))
-        record_priority = _source_priority(record)
+        record_rank = (_record_timestamp(record), _source_priority(record))
         for email in record.emails:
             existing = all_emails.get(email.value)
             if existing is None:
-                all_emails[email.value] = (email.label, record_priority)
+                all_emails[email.value] = (email.label, record_rank)
             else:
-                current_label, current_priority = existing
+                current_label, current_rank = existing
                 if _should_replace_label(
-                    current_label, current_priority, email.label, record_priority
+                    current_label, current_rank, email.label, record_rank
                 ):
-                    all_emails[email.value] = (email.label, record_priority)
+                    all_emails[email.value] = (email.label, record_rank)
         for phone in record.phones:
             normalized_value, is_confident = _normalize_phone_value(phone.value, default_country)
             if not normalized_value:
@@ -1240,16 +1298,16 @@ def _merge_cluster(
                 existing = all_phones.get(key)
                 candidate_label = phone.label or "invalid"
                 if existing is None or _should_replace_label(
-                    existing[0], existing[1], candidate_label, record_priority
+                    existing[0], existing[1], candidate_label, record_rank
                 ):
-                    all_phones[key] = (candidate_label, record_priority)
+                    all_phones[key] = (candidate_label, record_rank)
                 continue
             key = (normalized_value, phone.extension or "")
             existing = all_phones.get(key)
             if existing is None or _should_replace_label(
-                existing[0], existing[1], phone.label, record_priority
+                existing[0], existing[1], phone.label, record_rank
             ):
-                all_phones[key] = (phone.label, record_priority)
+                all_phones[key] = (phone.label, record_rank)
         for address in record.addresses:
             as_dict = address.to_dict()
             addr_key = json.dumps(as_dict, sort_keys=True)
@@ -1297,13 +1355,18 @@ def _merge_cluster(
         department=department,
         linkedin_url=linkedin,
         emails=[
-            Email(value=value, label=all_emails[value][0]) for value in sorted(all_emails.keys())
+            Email(value=value, label=all_emails[value][0] or "other")
+            for value in sorted(all_emails.keys())
         ],
         phones=[
             Phone(
                 value=value,
                 extension=extension,
-                label=all_phones[(value, extension)][0],
+                label=(
+                    all_phones[(value, extension)][0]
+                    if all_phones[(value, extension)][0]
+                    else "other"
+                ),
             )
             for value, extension in sorted(all_phones.keys())
         ],

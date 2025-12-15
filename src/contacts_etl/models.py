@@ -94,6 +94,7 @@ class ContactRecord:
     linkedin_url: str = ""
     source: str = ""
     source_row_id: str = ""
+    source_timestamp: str = ""
     emails: List[Email] = field(default_factory=list)
     phones: List[Phone] = field(default_factory=list)
     addresses: List[Address] = field(default_factory=list)
@@ -138,6 +139,7 @@ class ContactRecord:
             linkedin_url=str(payload.get("linkedin_url", "") or "").strip(),
             source=str(payload.get("source", "") or "").strip(),
             source_row_id=str(payload.get("source_row_id", "") or "").strip(),
+            source_timestamp=str(payload.get("source_timestamp", "") or "").strip(),
             emails=cls._ensure_email_list(payload.get("emails", []) or []),
             phones=cls._ensure_phone_list(payload.get("phones", []) or []),
             addresses=cls._ensure_address_list(payload.get("addresses", []) or []),
@@ -164,6 +166,7 @@ class ContactRecord:
             "linkedin_url": self.linkedin_url,
             "source": self.source,
             "source_row_id": self.source_row_id,
+            "source_timestamp": self.source_timestamp,
             "emails": [email.to_dict() for email in self.emails],
             "phones": [phone.to_dict() for phone in self.phones],
             "addresses": [address.to_dict() for address in self.addresses],

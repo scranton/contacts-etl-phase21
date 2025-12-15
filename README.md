@@ -42,6 +42,8 @@ Consolidated contacts include:
 
 - Normalized emails/phones/addresses with lowercased labels (deduped with preference for the freshest source: LinkedIn > macOS VCF > Gmail).
 - Inline channel visibility: malformed emails/phones are retained with label `invalid` so you can see the raw values without scanning auxiliary columns.
+- Dedupe never drops labels—when sources disagree, the most specific non-empty label wins and blank labels fall back to `other`.
+- When contact timestamps (e.g., LinkedIn “Connected On” or vCard `REV`) are available, the most recent record’s data wins before source priority is applied.
 - Source lineage and counts (`source_count`, `source_row_count`) for auditability, plus a `department` field sourced from Gmail and VCF data when available.
 - A flattened projection (`output/flattened_contacts.csv`) that surfaces the first `home`, `work`, and `other` email/phone/address for CRM systems that need fixed columns.
 
@@ -60,8 +62,9 @@ Open notebooks from the repo root so they can locate `config.yaml` and the confi
 
 ## Configuration & Logging
 
-- `config.yaml` controls input paths, output directory, normalization knobs, dedupe thresholds, validation weights (`quality.*` scores), tagging heuristics, and logging (`logging.level`).
-- CLI overrides exist for most options (including `--out-dir`). Logging level precedence is: environment variable `CONTACTS_ETL_LOG_LEVEL` > CLI `--log-level` > `config.yaml` setting > default `WARNING`.
+- `config.yaml` is the authoritative source for pipeline behavior: inputs/outputs, normalization knobs, dedupe thresholds, validation weights (`quality.*` scores), tagging heuristics, and logging (`logging.level`). Update it to persist new defaults in source control.
+- CLI flags (`--out-dir`, `--linkedin-csv`, etc.) are intended for one-off runs or ad hoc experiments. They temporarily override the config without mutating it.
+- Hard-coded defaults (e.g., `US` phone region, `WARNING` log level) only apply when neither `config.yaml` nor CLI values are provided. Logging level precedence remains `CONTACTS_ETL_LOG_LEVEL` > CLI `--log-level` > `config.yaml` > built-in default.
 
 ---
 
